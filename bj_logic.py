@@ -2,15 +2,16 @@
 
 def normalize_card(card):
     """
-    Entfernt Symbol (z. B. 'd','h','s','c') und gibt nur den Kartenwert zurück.
-    '3d' -> '3'
-    'Kd' -> 'K'
-    'As' -> 'A'
-    '10h' -> '10'
+    Entfernt Symbol (z.B. 'd','h','s','c') und gibt nur den Kartenwert zurück.
+    Beispiele:
+        '3d' -> '3'
+        'Kd' -> 'K'
+        'As' -> 'A'
+        '10h' -> '10'
     """
     card = str(card)
 
-    # falls die Karte mit "10" beginnt (zweistellig)
+    # 10 als Spezialfall (zweistellig)
     if card.startswith("10"):
         return "10"
 
@@ -19,7 +20,7 @@ def normalize_card(card):
 
 
 def card_value(card):
-
+    """Numerischer Kartenwert."""
     card = normalize_card(card)
 
     if card in ["J", "Q", "K"]:
@@ -31,38 +32,48 @@ def card_value(card):
 
 def hand_type(cards):
     """
+    Ermittelt Hand-Typ des Spielers.
+
     Returns:
         ("pair", value)
         ("soft", total)
         ("hard", total)
     """
 
-    # normalize all cards
     cards = [normalize_card(c) for c in cards]
 
-    # Pair?
+    # -------- PAIR-CHECK --------
     if len(cards) == 2 and cards[0] == cards[1]:
         v = card_value(cards[0])
         return "pair", v * 2
 
-    # Compute total with soft Ace handling
+    # -------- SOFT/HARD-LOGIC --------
     values = [card_value(c) for c in cards]
     total = sum(values)
 
-    # Soft?
-    if "A" in cards:
+    # Anzahl Asse (alle als 11 gezählt bisher)
+    aces = cards.count("A")
+
+    # Asse von 11 → 1 umwandeln bis total <= 21
+    while total > 21 and aces > 0:
+        total -= 10
+        aces -= 1
+
+    # Soft Hand: Wenn mindestens EIN Ass als 11 zählt
+    # Das ist der Fall, wenn *noch ein Ass als 11 zählt* → d.h. mindestens 1 Ace nicht umgewandelt
+    if "A" in cards and aces == cards.count("A"):
+        # bedeutet: alle Asse sind noch als 11 gezählt
         if total <= 21:
             return "soft", total
-        total -= 10  # make Ace=1 if needed
 
+    # Wenn kein Ass als 11 zählt → hard hand
     return "hard", total
 
 
 def dealer_value(card):
+    """Konvertiert Dealer-Upcard zu numerischem Wert."""
+    card = normalize_card(card)
 
-    card = normalize_card(card) 
-
-    """Convert dealer up-card symbol to numerical value."""
     if card in ["J", "Q", "K"]:
         return 10
     if card == "A":
@@ -72,8 +83,9 @@ def dealer_value(card):
 
 def basic_strategy(player_cards, dealer_cards):
     """
-    Implements exact Poker Basic Strategy.
-    Returns: "Hit", "Stand", "Double", "Split"
+    Blackjack Basic Strategy (4–8 Deck, Dealer Hits Soft 17).
+    Rückgabe:
+        "Hit", "Stand", "Double", "Split"
     """
 
     player_cards = [normalize_card(c) for c in player_cards]
