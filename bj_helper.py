@@ -8,6 +8,17 @@ from modlib.models import COLOR_FORMAT, MODEL_TYPE, Model
 from modlib.models.post_processors import pp_od_yolo_ultralytics
 import bj_logic as bj
 
+# PERSISTENTE LISTEN
+player_cards_persistent = []
+dealer_cards_persistent = []
+
+# MEMORY DECAY COUNTER (Frames seit letzter Sichtung)
+player_seen_counter = {}
+dealer_seen_counter = {}
+
+# Anzahl Frames bis Karte gelöscht wird
+DECAY_LIMIT = 20  
+
 
 class YOLO(Model):
     """YOLO model for IMX500 deployment."""
@@ -112,7 +123,6 @@ with device as stream:
         # Bild streamen
         frame.display()
 
-
         # prüfen ob karten erkennt werden
         if len(detections.bbox) > 0:
 
@@ -126,8 +136,8 @@ with device as stream:
 
             centers = np.array(centers)    
 
-            player_cards = [] 
-            dealer_cards = []
+            player_seen_this_frame = [] 
+            dealer_seen_this_frame = []
 
             for i, (cx, cy) in enumerate(centers):
                 card = model.labels[int(detections.class_id[i])]    # von der klasse model rufe die labels ab 
@@ -135,20 +145,56 @@ with device as stream:
                 # BBOX Format z.B: [0.4078125 0.78125   0.50625   0.8796875]
                 # Normierte Werte 0 - 1 der bildbreite
                 if cx <  0.5:
-                    player_cards.append(card)
+                    player_seen_this_frame.append(card)
 
-                if cx >= 0.5:
-                    dealer_cards.append(card)   
+                else:
+                    dealer_seen_this_frame.append(card)   
+
+
+            # ============================
+            #  UPDATE PLAYER MEMORY
+            # ============================
+
+            # 1) reset counter for seen cards
+            for c in player_seen_this_frame:
+                if c not in player_cards_persistent:
+                    player_cards_persistent.append(c)
+                player_seen_counter[c] = 0
+
+            # 2) increment counter for NOT seen cards
+            for c in list(player_cards_persistent):
+                if c not in player_seen_this_frame:
+                    player_seen_counter[c] += 1
+                    # DELETE card if unseen for too long
+                    if player_seen_counter[c] > DECAY_LIMIT:
+                        player_cards_persistent.remove(c)
+                        del player_seen_counter[c]
+
+            # ============================
+            #  UPDATE DEALER MEMORY
+            # ============================
+
+            for c in dealer_seen_this_frame:
+                if c not in dealer_cards_persistent:
+                    dealer_cards_persistent.append(c)
+                dealer_seen_counter[c] = 0
+
+            for c in list(dealer_cards_persistent):
+                if c not in dealer_seen_this_frame:
+                    dealer_seen_counter[c] += 1
+                    if dealer_seen_counter[c] > DECAY_LIMIT:
+                        dealer_cards_persistent.remove(c)
+                        del dealer_seen_counter[c]
 
 
             def log(msg):
                 with open("bj_log.txt", "a") as f:
                     f.write(msg + "\n")
 
-            for bbox in detections.bbox:
-                log(f"Dealer Cards: {dealer_cards}")
-                log(f"Player Cards: {player_cards}")   
 
-            action = bj.basic_strategy(player_cards, dealer_cards)
+            log(f"Dealer Cards: {dealer_cards_persistent}")
+            log(f"Player Cards: {player_cards_persistent}")   
+
+            action = bj.basic_strategy(player_cards_persistent, dealer_cards_persistent)
             log(f"Recommendation: {action}")
-    
+            # tail -f bj_log.txt >> to see in other terminal
