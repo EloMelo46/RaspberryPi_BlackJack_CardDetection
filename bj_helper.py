@@ -8,6 +8,7 @@ from modlib.models import COLOR_FORMAT, MODEL_TYPE, Model
 from modlib.models.post_processors import pp_od_yolo_ultralytics
 import bj_logic as bj
 
+
 # PERSISTENTE LISTEN
 player_cards_persistent = []
 dealer_cards_persistent = []
@@ -120,6 +121,9 @@ with device as stream:
         # geändertes Bild speichern
         frame.image = img
 
+        # Frame für Webserver speichern
+        cv2.imwrite("latest.jpg", frame.image)
+
         # Bild streamen
         frame.display()
 
@@ -198,3 +202,7 @@ with device as stream:
             action = bj.basic_strategy(player_cards_persistent, dealer_cards_persistent)
             log(f"Recommendation: {action}")
             # tail -f bj_log.txt >> to see in other terminal
+
+            # Recommendation Text für Webserver speichern
+            with open("latest.txt", "w") as f:
+                f.write(action)
