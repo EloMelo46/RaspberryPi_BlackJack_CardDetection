@@ -5,6 +5,8 @@ app = Flask(__name__)
 
 IMAGE_PATH = "latest.jpg"
 TEXT_PATH = "latest.txt"
+PLAYER_PATH = "player_cards.txt"
+DEALER_PATH = "dealer_cards.txt"
 
 
 @app.route("/")
@@ -12,7 +14,7 @@ def index():
     return f"""
     <html>
         <head>
-            <title>Blackjack Vision</title>
+            <title>Blackjack Basic Strategy</title>
 
             <style>
                 body {{
@@ -70,16 +72,72 @@ def index():
                     background: rgba(0, 180, 255, 0.35);
                     box-shadow: 0 0 12px rgba(0, 180, 255, 0.7);
                 }}
+
+                .cards-container {{
+                    display: flex;
+                    justify-content: center;
+                    gap: 40px;
+                    margin-top: 10px;
+                    margin-bottom: 10px;
+                    flex-wrap: wrap;
+                }}
+
+                .cards-column {{
+                    min-width: 140px;
+                }}
+
+                .cards-column h3 {{
+                    margin-bottom: 8px;
+                    font-weight: 400;
+                    color: #ccc;
+                }}
+
+                .card-row {{
+                    display: flex;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }}
+
+                .card-pill {{
+                    padding: 6px 10px;
+                    border-radius: 6px;
+                    background: #1e1e1e;
+                    font-size: 18px;
+                    min-width: 36px;
+                    text-align: center;
+                    box-shadow: 0 0 8px rgba(0,0,0,0.5);
+                }}
+
+                .card-black {{
+                    color: #ffffff;
+                }}
+
+                .card-red {{
+                    color: #ff4b4b;
+                }}
             </style>
 
         </head>
 
         <body>
 
-            <h1>Blackjack Vision</h1>
+            <h1>Blackjack Basic Strategy</h1>
 
-            <!-- Bild -->
+            <!-- Live-Bild -->
             <img id="frame" width="90%" src="/image">
+
+            <!-- Panels für Player / Dealer -->
+            <div class="cards-container">
+                <div class="cards-column">
+                    <h3>Player</h3>
+                    <div id="player-cards" class="card-row"></div>
+                </div>
+                <div class="cards-column">
+                    <h3>Dealer</h3>
+                    <div id="dealer-cards" class="card-row"></div>
+                </div>
+            </div>
 
             <!-- Recommendation Box -->
             <div id="recbox" class="rec-box">
@@ -87,20 +145,19 @@ def index():
             </div>
 
             <!-- ============================
-                 JavaScript (deine Logik + Anti-Hänger Fix)
+                 JavaScript: Reload Bild, Rec, Cards
             ============================ -->
             <script>
                 let loading = false;
 
-                // --- Bild Reload (identische Logik, aber mit Timeout-Fix) ---
+                // --- Bild Reload (deine Logik + Timeout-Fix gegen Hänger) ---
                 setInterval(() => {{
                     if (loading) return;
                     loading = true;
 
-                    // Timeout verhindert Freeze
                     let timeout = setTimeout(() => {{
                         loading = false;
-                    }}, 200);
+                    }}, 200); // 200ms Safety
 
                     let img = document.getElementById("frame");
                     let newSrc = "/image?ts=" + new Date().getTime();
@@ -120,7 +177,7 @@ def index():
                 }}, 100);  // 10 FPS
 
 
-                // --- Empfehlung Reload ---
+                // --- Recommendation Reload + Farb-Logik ---
                 setInterval(async () => {{
                     try {{
                         let resp = await fetch("/prediction");
@@ -130,11 +187,9 @@ def index():
                         let box = document.getElementById("recbox");
                         box.innerText = rec;
 
-                        // Reset styles
                         box.className = "rec-box";
 
                         let low = rec.toLowerCase();
-
                         if (low.includes("hit")) box.classList.add("hit");
                         if (low.includes("stand")) box.classList.add("stand");
                         if (low.includes("double")) box.classList.add("double");
@@ -144,6 +199,64 @@ def index():
                         console.warn("Rec load error:", e);
                     }}
                 }}, 300);
+
+
+                // --- Cards Reload (Player & Dealer) ---
+                async function updateCards() {{
+                    try {{
+                        let resp = await fetch("/cards");
+                        let data = await resp.json();
+
+                        let pDiv = document.getElementById("player-cards");
+                        let dDiv = document.getElementById("dealer-cards");
+
+                        pDiv.innerHTML = "";
+                        dDiv.innerHTML = "";
+
+                        function createCardSpan(code) {{
+                            let span = document.createElement("span");
+                            span.classList.add("card-pill");
+
+                            if (!code) {{
+                                span.innerText = "?";
+                                return span;
+                            }}
+
+                            code = code.toUpperCase().trim();  // z.B. "AS", "10H"
+                            let value = code.slice(0, -1);
+                            let suitLetter = code.slice(-1);
+                            let suitSymbol = "?";
+
+                            if (suitLetter === "S") suitSymbol = "♠";
+                            if (suitLetter === "C") suitSymbol = "♣";
+                            if (suitLetter === "H") suitSymbol = "♥";
+                            if (suitLetter === "D") suitSymbol = "♦";
+
+                            // Farbe nach Suit
+                            if (suitLetter === "H" || suitLetter === "D") {{
+                                span.classList.add("card-red");
+                            }} else {{
+                                span.classList.add("card-black");
+                            }}
+
+                            span.innerText = value + suitSymbol;
+                            return span;
+                        }}
+
+                        (data.player || []).forEach(c => {{
+                            pDiv.appendChild(createCardSpan(c));
+                        }});
+
+                        (data.dealer || []).forEach(c => {{
+                            dDiv.appendChild(createCardSpan(c));
+                        }});
+
+                    }} catch (e) {{
+                        console.warn("Cards load error:", e);
+                    }}
+                }}
+
+                setInterval(updateCards, 300);  // 3–4x pro Sekunde Karten aktualisieren
 
             </script>
 
@@ -164,6 +277,19 @@ def prediction():
     if os.path.exists(TEXT_PATH):
         return jsonify({"recommendation": open(TEXT_PATH).read()})
     return jsonify({"recommendation": None})
+
+
+@app.route("/cards")
+def cards():
+    def read_cards(path):
+        if os.path.exists(path):
+            return open(path).read().strip().split()
+        return []
+
+    return jsonify({
+        "player": read_cards(PLAYER_PATH),
+        "dealer": read_cards(DEALER_PATH)
+    })
 
 
 if __name__ == "__main__":

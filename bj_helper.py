@@ -203,6 +203,13 @@ with device as stream:
             log(f"Recommendation: {action}")
             # tail -f bj_log.txt >> to see in other terminal
 
-            # Recommendation Text für Webserver speichern
+            # Informationen für Webserver in .txt files speichern
             with open("latest.txt", "w") as f:
                 f.write(action)
+
+            with open("player_cards.txt", "w") as f:
+                f.write(" ".join(player_cards_persistent))
+
+            with open("dealer_cards.txt", "w") as f:
+                f.write(" ".join(dealer_cards_persistent))
+    

@@ -60,7 +60,6 @@ def hand_type(cards):
         aces -= 1
 
     # Soft Hand: Wenn mindestens EIN Ass als 11 zählt
-    # Das ist der Fall, wenn *noch ein Ass als 11 zählt* → d.h. mindestens 1 Ace nicht umgewandelt
     if "A" in cards and aces == cards.count("A"):
         # bedeutet: alle Asse sind noch als 11 gezählt
         if total <= 21:
