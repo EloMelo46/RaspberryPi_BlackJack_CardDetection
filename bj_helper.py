@@ -189,10 +189,14 @@ with device as stream:
                         dealer_cards_persistent.remove(c)
                         del dealer_seen_counter[c]
 
-
+            
+            # Creating log file
+            # Can be read in second terminal with "tail -f bj_log.txt"
+            """
             def log(msg):
                 with open("bj_log.txt", "a") as f:
                     f.write(msg + "\n")
+            """
 
 
             log(f"Dealer Cards: {dealer_cards_persistent}")
