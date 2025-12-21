@@ -14,7 +14,7 @@ def index():
     return f"""
     <html>
         <head>
-            <title>Blackjack Basic Strategy</title>
+           <title>Blackjack Basic Strategy</title> 
 
             <style>
                 body {{
@@ -27,30 +27,103 @@ def index():
                 }}
 
                 h1 {{
-                    font-size: 32px;
-                    font-weight: 300;
+                    font-size: 42px;  
+                    font-weight: 600;
+                    letter-spacing: 1px; 
+                    margin-bottom: 30px; 
+                    color: #fff;            /* Cyan/Neon */
+                    text-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
+                    font-family: "URW Gothic", 'Arial', sans-serif; 
+                }}
+
+
+                #frame {{
+                    width: 90%;
+                    max-width: 900px;
+                    border-radius: 16px;
+                    box-shadow: 0 0 22px rgba(0, 255, 255, 0.15);
                     margin-bottom: 20px;
                 }}
 
-                #frame {{
-                    width: 92%;
+                .panel-wrapper {{
+                    display: flex;
+                    width: 90%;
                     max-width: 900px;
-                    border-radius: 12px;
-                    box-shadow: 0 0 22px rgba(0, 255, 255, 0.15);
-                    margin-bottom: 25px;
+                    margin: 0 auto;
+                    margin-top: 10px;
+                    justify-content: space-between;
                 }}
 
-                .rec-box {{
-                    margin: 20px auto;
-                    padding: 18px;
-                    width: 80%;
-                    max-width: 420px;
+                .panel {{
+                    width: 48%;
+                    padding: 14px 0;
                     border-radius: 12px;
-                    font-size: 26px;
+                    background: rgba(20,20,20,0.9);
+                    box-shadow: 0 0 12px rgba(0,0,0,0.6);
+                }}
+
+                .panel-title {{
+                    font-size: 35px;
+                    font-weight: 500;
+                    margin-bottom: 20px;
+                    opacity: 0.85;
+                }}
+
+                .card-row {{
+                    display: flex;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                    gap: 12px;
+                }}
+
+                .card-pill {{
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+
+                    width: 70px;     
+                    height: 110px;      
+                    font-size: 28px;
+
+                    background: #1e1e1e;
+                    border-radius: 8px;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.5);
+
+                    text-align: center;
+                }}
+
+
+                .card-black {{
+                    color: #ffffff;
+                }}
+
+                .card-red {{
+                    color: #ff4b4b;
+                }}
+
+                /* --- RECOMMENDATION BOX --- */
+                .recbox-wrapper {{
+                    width: 100%;
+                    height: 140px;          /* FIXED height */
+                    margin-top: 40px;       /* spacing from panels */
+                    position: relative;     
+                }}
+
+                #recbox {{
+                    width: 85%;
+                    max-width: 900px;
+                    padding: 18px;
+                    border-radius: 12px;
+                    font-size: 40px;
                     font-weight: bold;
                     background: #1a1a1a;
-                    color: #ffffff;
-                    transition: 0.25s ease-in-out;
+                    color: white;
+                    transition: 0.25s ease;
+                    text-align: center;
+                    position: absolute;
+                    top: 20px;              /* fixed vertical position */
+                    left: 50%;
+                    transform: translateX(-50%);
                 }}
 
                 .hit {{
@@ -72,92 +145,45 @@ def index():
                     background: rgba(0, 180, 255, 0.35);
                     box-shadow: 0 0 12px rgba(0, 180, 255, 0.7);
                 }}
-
-                .cards-container {{
-                    display: flex;
-                    justify-content: center;
-                    gap: 40px;
-                    margin-top: 10px;
-                    margin-bottom: 10px;
-                    flex-wrap: wrap;
-                }}
-
-                .cards-column {{
-                    min-width: 140px;
-                }}
-
-                .cards-column h3 {{
-                    margin-bottom: 8px;
-                    font-weight: 400;
-                    color: #ccc;
-                }}
-
-                .card-row {{
-                    display: flex;
-                    justify-content: center;
-                    flex-wrap: wrap;
-                    gap: 8px;
-                }}
-
-                .card-pill {{
-                    padding: 6px 10px;
-                    border-radius: 6px;
-                    background: #1e1e1e;
-                    font-size: 18px;
-                    min-width: 36px;
-                    text-align: center;
-                    box-shadow: 0 0 8px rgba(0,0,0,0.5);
-                }}
-
-                .card-black {{
-                    color: #ffffff;
-                }}
-
-                .card-red {{
-                    color: #ff4b4b;
-                }}
             </style>
-
         </head>
 
         <body>
 
             <h1>Blackjack Basic Strategy</h1>
 
-            <!-- Live-Bild -->
-            <img id="frame" width="90%" src="/image">
+            <!-- Video -->
+            <img id="frame" src="/image">
 
-            <!-- Panels für Player / Dealer -->
-            <div class="cards-container">
-                <div class="cards-column">
-                    <h3>Player</h3>
+            <!-- Fixed recommendation area before panels -->
+            <div class="recbox-wrapper">
+                <div id="recbox">{open(TEXT_PATH).read() if os.path.exists(TEXT_PATH) else "No prediction"}</div>
+            </div>
+
+            <!-- Panels go below the fixed recbox -->
+            <div class="panel-wrapper">
+                <div class="panel">
+                    <div class="panel-title">Player</div>
                     <div id="player-cards" class="card-row"></div>
                 </div>
-                <div class="cards-column">
-                    <h3>Dealer</h3>
+
+                <div class="panel">
+                    <div class="panel-title">Dealer</div>
                     <div id="dealer-cards" class="card-row"></div>
                 </div>
             </div>
 
-            <!-- Recommendation Box -->
-            <div id="recbox" class="rec-box">
-                {open(TEXT_PATH).read() if os.path.exists(TEXT_PATH) else "No prediction"}
-            </div>
 
-            <!-- ============================
-                 JavaScript: Reload Bild, Rec, Cards
-            ============================ -->
             <script>
                 let loading = false;
 
-                // --- Bild Reload (deine Logik + Timeout-Fix gegen Hänger) ---
                 setInterval(() => {{
                     if (loading) return;
                     loading = true;
 
                     let timeout = setTimeout(() => {{
                         loading = false;
-                    }}, 200); // 200ms Safety
+                    }}, 200);
 
                     let img = document.getElementById("frame");
                     let newSrc = "/image?ts=" + new Date().getTime();
@@ -174,10 +200,8 @@ def index():
                     }};
                     tempImage.src = newSrc;
 
-                }}, 100);  // 10 FPS
+                }}, 100);
 
-
-                // --- Recommendation Reload + Farb-Logik ---
                 setInterval(async () => {{
                     try {{
                         let resp = await fetch("/prediction");
@@ -187,33 +211,29 @@ def index():
                         let box = document.getElementById("recbox");
                         box.innerText = rec;
 
-                        box.className = "rec-box";
-
+                        box.className = "";
                         let low = rec.toLowerCase();
-                        if (low.includes("hit")) box.classList.add("hit");
+                        if (low.includes("hit"))   box.classList.add("hit");
                         if (low.includes("stand")) box.classList.add("stand");
                         if (low.includes("double")) box.classList.add("double");
-                        if (low.includes("split")) box.classList.add("split");
+                        if (low.includes("split"))  box.classList.add("split");
 
                     }} catch (e) {{
                         console.warn("Rec load error:", e);
                     }}
                 }}, 300);
 
-
-                // --- Cards Reload (Player & Dealer) ---
                 async function updateCards() {{
                     try {{
                         let resp = await fetch("/cards");
                         let data = await resp.json();
-
                         let pDiv = document.getElementById("player-cards");
                         let dDiv = document.getElementById("dealer-cards");
 
                         pDiv.innerHTML = "";
                         dDiv.innerHTML = "";
 
-                        function createCardSpan(code) {{
+                        function makeCard(code) {{
                             let span = document.createElement("span");
                             span.classList.add("card-pill");
 
@@ -222,33 +242,31 @@ def index():
                                 return span;
                             }}
 
-                            code = code.toUpperCase().trim();  // z.B. "AS", "10H"
+                            code = code.toUpperCase().trim();
                             let value = code.slice(0, -1);
-                            let suitLetter = code.slice(-1);
-                            let suitSymbol = "?";
+                            let s = code.slice(-1);
+                            let symbol = "?";
 
-                            if (suitLetter === "S") suitSymbol = "♠";
-                            if (suitLetter === "C") suitSymbol = "♣";
-                            if (suitLetter === "H") suitSymbol = "♥";
-                            if (suitLetter === "D") suitSymbol = "♦";
+                            if (s === "S") symbol = "♠";
+                            if (s === "C") symbol = "♣";
+                            if (s === "H") symbol = "♥";
+                            if (s === "D") symbol = "♦";
 
-                            // Farbe nach Suit
-                            if (suitLetter === "H" || suitLetter === "D") {{
+                            if (s === "H" || s === "D")
                                 span.classList.add("card-red");
-                            }} else {{
+                            else
                                 span.classList.add("card-black");
-                            }}
 
-                            span.innerText = value + suitSymbol;
+                            span.innerText = value + symbol;
                             return span;
                         }}
 
                         (data.player || []).forEach(c => {{
-                            pDiv.appendChild(createCardSpan(c));
+                            pDiv.appendChild(makeCard(c));
                         }});
 
                         (data.dealer || []).forEach(c => {{
-                            dDiv.appendChild(createCardSpan(c));
+                            dDiv.appendChild(makeCard(c));
                         }});
 
                     }} catch (e) {{
@@ -256,8 +274,7 @@ def index():
                     }}
                 }}
 
-                setInterval(updateCards, 300);  // 3–4x pro Sekunde Karten aktualisieren
-
+                setInterval(updateCards, 300);
             </script>
 
         </body>

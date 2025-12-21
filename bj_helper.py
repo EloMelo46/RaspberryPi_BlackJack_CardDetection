@@ -26,14 +26,14 @@ class YOLO(Model):
 
     def __init__(self):
         super().__init__(
-            model_file="/home/elomelo/card_detection/best_imx_model/packerOut.zip",
+            model_file="/home/elomelo/card_detection/yolov8n_imx_model_300cal/packerOut.zip",
             model_type=MODEL_TYPE.CONVERTED,
             color_format=COLOR_FORMAT.RGB,
             preserve_aspect_ratio=False,
         )
 
         self.labels = np.genfromtxt(
-            "/home/elomelo/card_detection/best_imx_model/labels.txt",
+            "/home/elomelo/card_detection/yolov8n_imx_model/labels.txt",
             dtype=str,
             delimiter="\n",
         )
@@ -53,7 +53,7 @@ with device as stream:
         
         # Detections ist ein objekt mit attributen bounding boxes, Klassen IDs, confidence werte
         # Filtert die liste nach confidenz wert
-        detections = frame.detections[frame.detections.confidence > 0.6]
+        detections = frame.detections[frame.detections.confidence > 0.45]
 
         # === Nur beste Box pro Klasse ===
         keep_indices = []
@@ -146,14 +146,13 @@ with device as stream:
             for i, (cx, cy) in enumerate(centers):
                 card = model.labels[int(detections.class_id[i])]    # von der klasse model rufe die labels ab 
 
-                # BBOX Format z.B: [0.4078125 0.78125   0.50625   0.8796875]
+                # BBOX Format z.B: [0.4078125 0.78125   0.50625   0.8796875] = [x1, y1, x2, y2]
                 # Normierte Werte 0 - 1 der bildbreite
                 if cx <  0.5:
                     player_seen_this_frame.append(card)
 
                 else:
                     dealer_seen_this_frame.append(card)   
-
 
             # ============================
             #  UPDATE PLAYER MEMORY
