@@ -26,14 +26,14 @@ class YOLO(Model):
 
     def __init__(self):
         super().__init__(
-            model_file="/home/elomelo/card_detection/yolov8n_imx_model_300cal/packerOut.zip",
+            model_file="./yolov8n_imx_model_300cal/packerOut.zip",
             model_type=MODEL_TYPE.CONVERTED,
             color_format=COLOR_FORMAT.RGB,
             preserve_aspect_ratio=False,
         )
 
         self.labels = np.genfromtxt(
-            "/home/elomelo/card_detection/yolov8n_imx_model/labels.txt",
+            "./yolov8n_imx_model/labels.txt",
             dtype=str,
             delimiter="\n",
         )

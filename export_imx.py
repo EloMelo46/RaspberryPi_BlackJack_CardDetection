@@ -12,8 +12,8 @@ os.environ["MCT_REPRESENTATIVE_DATASET_BATCH_SIZE"] = "4"
 def main():
     print("Starting YOLO >> IMX500 Export (Patch)...")
 
-    MODEL_PATH = "/home/elomelo/card_detection/best.pt"
-    DATASET_YAML = "/home/elomelo/card_detection/cards.yaml" 
+    MODEL_PATH = "best.pt"
+    DATASET_YAML = "cards.yaml"
 
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(f"Konnte das Modell {MODEL_PATH} nicht finden!")

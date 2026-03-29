@@ -17,7 +17,7 @@ if __name__ == "__main__":
 
     model = YOLO("yolov8n.pt")  # vortrainiertes COCO-Modell
     results = model.train(
-        data="/home/elomelo/card_detection/cards.yaml",
+        data="cards.yaml",
         epochs=25,
         imgsz=640,
         batch=8,
@@ -44,7 +44,7 @@ if __name__ == "__main__":
         format="imx",                      # offizieller IMX-Exporter (ab v8.3.223+)
         imgsz=640,                         # Eingangsgröße
         int8=True,                         # INT8-Quantisierung aktivieren
-        data="/home/elomelo/card_detection/cards.yaml",  # repräsentatives Dataset für Calibration
+        data="cards.yaml",  # repräsentatives Dataset für Calibration
         fraction=0.05                      # 5 % der Trainingsbilder für Kalibrierung
     )
 

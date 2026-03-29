@@ -48,6 +48,6 @@ def visualize_image_with_annotation_bboxes(image_dir, label_dir, n=12):
 
 if __name__ == "__main__":
     visualize_image_with_annotation_bboxes(
-        "/home/elomelo/card_detection/archive/test/images",
-        "/home/elomelo/card_detection/archive/test/labels"
+        "./dataset/archive/test/images",
+        "./dataset/archive/test/labels"
     )
