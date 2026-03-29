@@ -9,15 +9,15 @@ from modlib.models.post_processors import pp_od_yolo_ultralytics
 import bj_logic as bj
 
 
-# PERSISTENTE LISTEN
+# PERSISTENT LISTS
 player_cards_persistent = []
 dealer_cards_persistent = []
 
-# MEMORY DECAY COUNTER (Frames seit letzter Sichtung)
+# MEMORY DECAY COUNTER (Frames since last sighting)
 player_seen_counter = {}
 dealer_seen_counter = {}
 
-# Anzahl Frames bis Karte gelöscht wird
+# Number of frames until card is deleted
 DECAY_LIMIT = 20  
 
 
@@ -42,7 +42,7 @@ class YOLO(Model):
         return pp_od_yolo_ultralytics(output_tensors)
 
 
-# ====== Kamera + Modell starten ======
+# ====== Start Camera + Model ======
 device = AiCamera(frame_rate=12)
 model = YOLO()
 device.deploy(model)
@@ -51,11 +51,11 @@ annotator = Annotator()
 with device as stream:
     for frame in stream:
         
-        # Detections ist ein objekt mit attributen bounding boxes, Klassen IDs, confidence werte
-        # Filtert die liste nach confidenz wert
+        # detections is an object with bounding boxes, class IDs, and confidence values
+        # filters the list by confidence value
         detections = frame.detections[frame.detections.confidence > 0.45]
 
-        # === Nur beste Box pro Klasse ===
+        # === Only best box per class ===
         keep_indices = []
         seen = {}
         for i, (conf, cls) in enumerate(zip(detections.confidence, detections.class_id)):
@@ -63,7 +63,7 @@ with device as stream:
                 seen[cls] = i
         keep_indices = list(seen.values())
 
-        # erzeugt neues Detections-Objekt vom gleichen Typ
+        # creates new detections object of the same type
         DetectionsType = type(detections)
         detections = DetectionsType(
             bbox=detections.bbox[keep_indices],
@@ -71,27 +71,27 @@ with device as stream:
             confidence=detections.confidence[keep_indices],
         )
         # =================================
-        # Erstellt eine liste von mit karten ID und detection confidence pro index
+        # creates a list of card IDs and detection confidence per index
         labels = [
             f"{model.labels[int(c)]}: {s:.2f}"
             for c, s in zip(detections.class_id, detections.confidence)
         ]
 
-        # Zeichnet für jedes frame das detection objekt mit label ein, alpha = opazität
+        # draws annotated boxes on each frame, alpha = opacity
         annotator.annotate_boxes(
             frame, detections, labels=labels, alpha=0.3, corner_radius=8
         )
 
-        # === Linie + Text Overlay ===
-        img = frame.image  # Zugriff auf das eigentliche RGB-Bild (NumPy-Array)
+        # === Line + Text Overlay ===
+        img = frame.image  # Access the actual RGB image (NumPy array)
 
         h, w, _ = img.shape
         middle_x = w // 2
 
-        # Vertikale weisse Mittellinie
+        # Vertical white center line
         cv2.line(img, (middle_x, 0), (middle_x, h), (255, 255, 255), thickness=2)
 
-        # Texte oben links und rechts
+        # Text at top left and right
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.6
         color = (255, 255, 255)
@@ -118,19 +118,19 @@ with device as stream:
             cv2.LINE_AA,
         )
 
-        # geändertes Bild speichern
+        # save modified image
         frame.image = img
 
-        # Frame für Webserver speichern
+        # Save frame for web server
         cv2.imwrite("latest.jpg", frame.image)
 
-        # Bild streamen
+        # Stream image
         frame.display()
 
-        # prüfen ob karten erkennt werden
+        # check if cards are detected
         if len(detections.bbox) > 0:
 
-            # center der erkannten bboxes ermitteln
+            # calculate center of detected bboxes
             centers = [] 
 
             for bbox in detections.bbox:
@@ -144,10 +144,10 @@ with device as stream:
             dealer_seen_this_frame = []
 
             for i, (cx, cy) in enumerate(centers):
-                card = model.labels[int(detections.class_id[i])]    # von der klasse model rufe die labels ab 
+                card = model.labels[int(detections.class_id[i])]    # get labels from model class
 
-                # BBOX Format z.B: [0.4078125 0.78125   0.50625   0.8796875] = [x1, y1, x2, y2]
-                # Normierte Werte 0 - 1 der bildbreite
+                # BBOX Format e.g.: [0.4078125 0.78125   0.50625   0.8796875] = [x1, y1, x2, y2]
+                # Normalized values 0 - 1 of image width
                 if cx <  0.5:
                     player_seen_this_frame.append(card)
 
@@ -206,7 +206,7 @@ with device as stream:
             log(f"Recommendation: {action}")
             # tail -f bj_log.txt >> to see in other terminal
 
-            # Informationen für Webserver in .txt files speichern
+            # Save information for web server in .txt files
             with open("latest.txt", "w") as f:
                 f.write(action)
 

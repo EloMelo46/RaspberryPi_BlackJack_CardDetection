@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-Trainiert YOLOv8n auf deinem Kartendatensatz, exportiert es direkt
-für den Sony IMX500 (imx-Format mit INT8-Quantisierung) und zeigt 
-eine grafische Auswertung der Trainingsmetriken.
+Train YOLOv8n on card dataset and export for IMX500.
 """
 
 from ultralytics import YOLO
@@ -26,7 +24,7 @@ if __name__ == "__main__":
         name="cards_yolov8n"
     )
 
-    # Pfad zum besten Modell bestimmen
+    # model path
     run_dir = getattr(results, "save_dir", "runs/detect/cards_yolov8n")
     best_model_path = os.path.join(run_dir, "weights", "best.pt")
 

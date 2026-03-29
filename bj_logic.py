@@ -2,8 +2,8 @@
 
 def normalize_card(card):
     """
-    Entfernt Symbol (z.B. 'd','h','s','c') und gibt nur den Kartenwert zurück.
-    Beispiele:
+    Removes suit symbol (e.g., 'd','h','s','c') and returns only the card rank.
+    Examples:
         '3d' -> '3'
         'Kd' -> 'K'
         'As' -> 'A'
@@ -11,16 +11,16 @@ def normalize_card(card):
     """
     card = str(card)
 
-    # 10 als Spezialfall (zweistellig)
+    # 10 as special case (two digits)
     if card.startswith("10"):
         return "10"
 
-    # sonst erster Buchstabe
+    # otherwise first character
     return card[0]
 
 
 def card_value(card):
-    """Numerischer Kartenwert."""
+    """Numerical card value."""
     card = normalize_card(card)
 
     if card in ["J", "Q", "K"]:
@@ -32,7 +32,7 @@ def card_value(card):
 
 def hand_type(cards):
     """
-    Ermittelt Hand-Typ des Spielers.
+    Determines the player's hand type.
 
     Returns:
         ("pair", value)
@@ -51,26 +51,26 @@ def hand_type(cards):
     values = [card_value(c) for c in cards]
     total = sum(values)
 
-    # Anzahl Asse (alle als 11 gezählt bisher)
+    # Number of Aces (all counted as 11 so far)
     aces = cards.count("A")
 
-    # Asse von 11 → 1 umwandeln bis total <= 21
+    # Convert Aces from 11 -> 1 until total <= 21
     while total > 21 and aces > 0:
         total -= 10
         aces -= 1
 
-    # Soft Hand: Wenn mindestens EIN Ass als 11 zählt
+    # Soft Hand: If at least ONE Ace counts as 11
     if "A" in cards and aces == cards.count("A"):
-        # bedeutet: alle Asse sind noch als 11 gezählt
+        # means: all Aces are still counted as 11
         if total <= 21:
             return "soft", total
 
-    # Wenn kein Ass als 11 zählt → hard hand
+    # If no Ace counts as 11 -> hard hand
     return "hard", total
 
 
 def dealer_value(card):
-    """Konvertiert Dealer-Upcard zu numerischem Wert."""
+    """Converts Dealer-Upcard to numerical value."""
     card = normalize_card(card)
 
     if card in ["J", "Q", "K"]:

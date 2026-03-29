@@ -7,7 +7,7 @@ from modlib.models import COLOR_FORMAT, MODEL_TYPE, Model
 from modlib.models.post_processors import pp_od_yolo_ultralytics
 
 class YOLO(Model):
-    """YOLO model for IMX500 deployment."""
+    """YOLO model wrapper."""
 
     def __init__(self):
         super().__init__(
@@ -27,7 +27,7 @@ class YOLO(Model):
         return pp_od_yolo_ultralytics(output_tensors)
 
 
-# ====== Kamera + Modell starten ======
+# setup cam and model
 device = AiCamera(frame_rate=12)
 model = YOLO()
 device.deploy(model)
@@ -37,7 +37,7 @@ with device as stream:
     for frame in stream:
         detections = frame.detections[frame.detections.confidence > 0.4]
 
-        # === Nur beste Box pro Klasse ===
+        # only best box per class
         keep_indices = []
         seen = {}
         for i, (conf, cls) in enumerate(zip(detections.confidence, detections.class_id)):
@@ -46,7 +46,7 @@ with device as stream:
         keep_indices = list(seen.values())
         
 
-        # erzeugt neues Detections-Objekt vom gleichen Typ
+        # create new detections object
         DetectionsType = type(detections)
         detections = DetectionsType(
             bbox=detections.bbox[keep_indices],

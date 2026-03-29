@@ -31,7 +31,7 @@ def index():
                     font-weight: 600;
                     letter-spacing: 1px; 
                     margin-bottom: 30px; 
-                    color: #fff;            /* Cyan/Neon */
+                    color: #fff;            /* White */
                     text-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
                     font-family: "URW Gothic", 'Arial', sans-serif; 
                 }}
@@ -284,6 +284,7 @@ def index():
 
 @app.route("/image")
 def image():
+    """Serve latest capture."""
     if os.path.exists(IMAGE_PATH):
         return send_file(IMAGE_PATH, mimetype='image/jpeg')
     return "No image", 404
