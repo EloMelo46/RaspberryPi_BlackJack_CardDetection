@@ -1,4 +1,4 @@
-# bj_logic.py
+# bj_logic.py (renamed to card_logic.py)
 
 def normalize_card(card):
     """
