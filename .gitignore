@@ -1,6 +1,6 @@
 archive/
 __pycache__/
-venv_card_detection/
-
-
+venv_bj/
 .idea/
+hailo-rpi5-examples/
+outputs/

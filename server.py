@@ -1,12 +1,13 @@
 from flask import Flask, send_file, jsonify
 import os
+import re
 
 app = Flask(__name__)
 
-IMAGE_PATH = "latest.jpg"
-TEXT_PATH = "latest.txt"
-PLAYER_PATH = "player_cards.txt"
-DEALER_PATH = "dealer_cards.txt"
+IMAGE_PATH = os.path.join("outputs", "latest.jpg")
+TEXT_PATH = os.path.join("outputs", "latest.txt")
+PLAYER_PATH = os.path.join("outputs", "player_cards.txt")
+DEALER_PATH = os.path.join("outputs", "dealer_cards.txt")
 
 
 @app.route("/")
@@ -300,9 +301,17 @@ def prediction():
 @app.route("/cards")
 def cards():
     def read_cards(path):
-        if os.path.exists(path):
-            return open(path).read().strip().split()
-        return []
+        if not os.path.exists(path):
+            return []
+
+        text = open(path).read().strip()
+        if not text or text.lower() == "no cards":
+            return []
+
+        # Card files are written like: "Kd, 7c".
+        # A plain .split() leaves commas attached, e.g. "Kd," -> suit becomes "," -> "KD?".
+        cards = [card.strip() for card in re.split(r"[,:;\s]+", text) if card.strip()]
+        return [card for card in cards if card.lower() != "no" and card.lower() != "cards"]
 
     return jsonify({
         "player": read_cards(PLAYER_PATH),
