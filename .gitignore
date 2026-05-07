@@ -4,3 +4,5 @@ venv_bj/
 .idea/
 hailo-rpi5-examples/
 outputs/
+hailort.log/
+

@@ -1,6 +1,7 @@
 from flask import Flask, send_file, jsonify
 import os
 import re
+import bj_logic as bj
 
 app = Flask(__name__)
 
@@ -311,7 +312,19 @@ def cards():
         # Card files are written like: "Kd, 7c".
         # A plain .split() leaves commas attached, e.g. "Kd," -> suit becomes "," -> "KD?".
         cards = [card.strip() for card in re.split(r"[,:;\s]+", text) if card.strip()]
-        return [card for card in cards if card.lower() != "no" and card.lower() != "cards"]
+        cards = [card for card in cards if card.lower() != "no" and card.lower() != "cards"]
+
+        # Sort cards by blackjack rank (2-10, J, Q, K, A) to keep dashboard stable
+        rank_order = {"2": 0, "3": 1, "4": 2, "5": 3, "6": 4, "7": 5, "8": 6, "9": 7, "10": 8, "J": 9, "Q": 10, "K": 11, "A": 12}
+        try:
+            def sort_key(c):
+                rank = bj.normalize_card(c).upper()
+                return (rank_order.get(rank, 99), c)
+            cards.sort(key=sort_key)
+        except Exception:
+            pass
+
+        return cards
 
     return jsonify({
         "player": read_cards(PLAYER_PATH),
