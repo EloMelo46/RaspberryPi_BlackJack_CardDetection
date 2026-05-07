@@ -55,9 +55,15 @@ sudo apt-get install -y libcamera-dev
 
 ## Usage
 
-### Start Card Detection
+### Start Card Detection & Web Server
 ```bash
-python run_card_detection.py
+source venv_bj/bin/activate
+
+# Default: 1 deck (for True Count calculation)
+python main.py
+
+# Or specify deck count
+python main.py --decks 6
 ```
 
 Expected output:
@@ -70,10 +76,10 @@ Expected output:
 [INIT] Ready. Press 'q' to quit.
 ```
 
-### Start Web Server (in another terminal)
+### Start Web Dashboard (in another terminal)
 ```bash
 source venv_bj/bin/activate
-python server.py
+python websocket.py
 ```
 
 ### Access Web Dashboard
@@ -83,22 +89,28 @@ http://<raspberry-pi-ip>:5000
 ```
 
 You'll see:
-- **Live camera feed** with detected cards
+- **Live camera feed** with detected cards and annotations
 - **Player cards** (left side, green boxes)
 - **Dealer cards** (right side, red boxes)
-- **Strategy recommendation** (Hit/Stand/Double/Split)
+- **Hi-Lo True Count** (displayed on frame)
+- **Strategy recommendation** (Hit/Stand/Double/Split based on Basic Strategy)
 
 ## Project Structure
 ```
 RaspberryPi_BlackJack_CardDetection/
-├── run_card_detection.py      # Main inference loop (Hailo 10H)
-├── server.py                   # Flask web interface
-├── bj_logic.py                 # Blackjack strategy engine
-├── bj_helper.py               # [Obsolete] See run_card_detection.py
-├── cards.yaml                 # Dataset config (reference)
-├── yolo26m.hef               # Pre-trained model (add manually)
-├── requirements.txt           # Python dependencies
-└── README.md
+├── main.py                      # Entrypoint with CLI deck option
+├── config.py                    # Configuration constants
+├── camera.py                    # Camera initialization wrapper
+├── hailo_inference.py           # Hailo detector class & inference
+├── preprocessing.py             # Image processing (letterbox, NMS, etc.)
+├── postprocessing.py            # Card tracking, counting, annotation
+├── card_logic.py                # Blackjack Basic Strategy engine
+├── websocket.py                 # Flask web UI server
+├── cards.yaml                   # Dataset config (reference)
+├── yolo26m.hef                  # Pre-trained model (add manually)
+├── requirements.txt             # Python dependencies
+├── INSTALLATION.md              # Detailed setup guide
+└── README.md                    # This file
 ```
 
 ## How It Works
@@ -130,15 +142,23 @@ RaspberryPi_BlackJack_CardDetection/
 
 ## Configuration
 
-Edit `run_card_detection.py` to adjust:
+Edit `config.py` to adjust:
 
 ```python
 MODEL_PATH = "./yolo26m.hef"              # HEF model path
-CONFIDENCE_THRESHOLD = 0.66               # Detection confidence
-DECAY_LIMIT = 20                          # Frames until card removal
-FPS = 25                                  # Target frame rate
+CONFIDENCE_THRESHOLD = 0.55               # Detection confidence
+DECAY_LIMIT = 50                          # Frames until card removal
+NMS_IOU_THRESHOLD = 0.45                  # NMS threshold
+MAX_DETECTIONS_PER_CLASS = 1              # Max detections per card
+FPS = 20                                  # Target frame rate
 FRAME_WIDTH = 640                         # Camera resolution
 FRAME_HEIGHT = 480
+NUM_DECKS = 1                             # Default decks (override with --decks)
+```
+
+Or override deck count at runtime:
+```bash
+python main.py --decks 6  # For True Count in 6-deck shoe
 ```
 
 ## Troubleshooting
