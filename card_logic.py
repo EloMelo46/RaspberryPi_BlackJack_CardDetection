@@ -125,8 +125,12 @@ def basic_strategy(player_cards, dealer_cards):
     #        SOFT STRATEGY
     # ============================
     if htype == "soft":
-        if value in [13, 14, 15, 16, 17]:
+        if value in [13, 14]:
+            return "Double" if 5 <= dealer <= 6 else "Hit"
+        if value in [15, 16]:
             return "Double" if 4 <= dealer <= 6 else "Hit"
+        if value == 17:
+            return "Double" if 3 <= dealer <= 6 else "Hit"
         if value == 18:
             if 3 <= dealer <= 6:
                 return "Double"
@@ -147,7 +151,7 @@ def basic_strategy(player_cards, dealer_cards):
         if value == 10:
             return "Double" if 2 <= dealer <= 9 else "Hit"
         if value == 11:
-            return "Double"
+            return "Double" if 2 <= dealer <= 10 else "Hit"
         if value == 12:
             return "Stand" if 4 <= dealer <= 6 else "Hit"
         if 13 <= value <= 16:
