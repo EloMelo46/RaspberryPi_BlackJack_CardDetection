@@ -3,12 +3,174 @@ import json
 from config import OUTPUT_DIR, CARD_LABELS, DECAY_LIMIT, NUM_DECKS
 import card_logic as bj
 from preprocessing import limit_detections_per_class
+from game_state import GameSession
 
 # Persistent state
 player_cards_persistent = []
 dealer_cards_persistent = []
 player_seen_counter = {}
 dealer_seen_counter = {}
+
+# Game session manages hands, splits and outcomes
+session = GameSession()
+
+# Game statistics
+game_stats = {
+    "player_wins": 0,
+    "dealer_wins": 0,
+    "pushes": 0,
+    "blackjacks": 0,
+    "last_outcome": None,
+}
+last_published_outcome = None
+
+
+def load_game_stats():
+    """Reset game stats on every process start."""
+    global game_stats
+    game_stats = {
+        "player_wins": 0,
+        "dealer_wins": 0,
+        "pushes": 0,
+        "blackjacks": 0,
+        "last_outcome": None,
+    }
+    save_game_stats()
+
+
+def save_game_stats():
+    """Save game stats to JSON file."""
+    stats_file = OUTPUT_DIR / "game_stats.json"
+    try:
+        # enrich stats with current session phase and leader
+        try:
+            game_stats["round_phase"] = get_round_phase()
+            game_stats["current_leader"] = get_current_leader()
+        except Exception:
+            game_stats["round_phase"] = "unknown"
+            game_stats["current_leader"] = "unknown"
+        with open(stats_file, "w") as f:
+            json.dump(game_stats, f, indent=2)
+    except Exception as e:
+        print(f"[STATS] Error writing stats: {e}")
+
+
+def check_and_publish_outcomes():
+    """
+    Check if a game is complete (all player hands stand/bust and dealer has cards).
+    If so, compute outcomes, update stats, and save results.
+    """
+    global game_stats, last_published_outcome
+    
+    # If dealer reached stand threshold, finalize round even if phase lagged.
+    try:
+        if session.phase == "dealer" and session.dealer_hand and session.dealer_hand.value() >= 17:
+            session.phase = "compute"
+    except Exception:
+        pass
+
+    # Only publish outcomes when session reached compute/complete phase
+    if session.phase not in ("compute", "complete"):
+        return
+
+    # Require dealer hand to be present
+    if not session.player_hands or not session.dealer_hand:
+        return
+
+    # Publish exactly once per round
+    if getattr(session, "outcome_published", False):
+        return
+
+    # Compute outcomes
+    outcomes = session.compute_outcomes()
+    if not outcomes:
+        return
+
+    # Build a single outcome string for this round to prevent duplicate publishes
+    outcome_str = None
+    for res in outcomes:
+        if res['result'] == 'win':
+            outcome_str = "Player Win!"
+            break
+        if res['result'] == 'win_blackjack':
+            outcome_str = "Blackjack! Player Win!"
+            break
+        if res['result'] == 'lose':
+            outcome_str = "Dealer Wins"
+            break
+        if res['result'] == 'push':
+            outcome_str = "Push"
+            break
+
+    if outcome_str is None:
+        return
+
+    # Update stats for each hand result (only once per round)
+    for res in outcomes:
+        if res['result'] == 'win':
+            game_stats["player_wins"] += 1
+        elif res['result'] == 'win_blackjack':
+            game_stats["blackjacks"] += 1
+            game_stats["player_wins"] += 1
+        elif res['result'] == 'lose':
+            game_stats["dealer_wins"] += 1
+        elif res['result'] == 'push':
+            game_stats["pushes"] += 1
+
+    game_stats["last_outcome"] = outcome_str
+    last_published_outcome = outcome_str
+    session.outcome_published = True
+    save_game_stats()
+
+    # Mark round complete on session so UI can reflect it and prevent re-publishing
+    try:
+        # mark hands finished so all_done checks won't retrigger
+        for h in session.player_hands:
+            h.status = "finished"
+        session.end_round()
+    except Exception:
+        pass
+
+
+def get_round_phase() -> str:
+    try:
+        return session.phase
+    except Exception:
+        return "idle"
+
+
+def get_current_leader() -> str:
+    """Return who is currently leading: 'player', 'dealer', 'push', or 'unknown'.
+
+    Logic: only decide when dealer has revealed its second card. Compare active
+    player's hand value vs dealer value. If player bust -> dealer. If dealer
+    bust -> player. If equal -> push.
+    """
+    try:
+        if not session.player_hands:
+            return "unknown"
+        if not session.dealer_hand or len(session.dealer_hand.cards) < 2:
+            return "unknown"
+
+        active = session.get_active_hand() or session.player_hands[0]
+        pv = active.value()
+        dv = session.dealer_hand.value()
+
+        if active.is_bust():
+            return "dealer"
+        if session.dealer_hand.is_bust():
+            return "player"
+        if pv > dv:
+            return "player"
+        if pv < dv:
+            return "dealer"
+        return "push"
+    except Exception:
+        return "unknown"
+
+
+# Load stats on module import
+load_game_stats()
 
 
 def update_card_tracking(detections, frame_width):
@@ -36,11 +198,13 @@ def update_card_tracking(detections, frame_width):
             detected_dealer_cards.add(card_label)
             dealer_seen_counter[card_label] = 0
 
-    # NOTE:
-    # This preserves your current behavior, but it does not truly keep cards across missed frames.
-    # I left it unchanged so only the inference path is fixed.
-    player_cards_persistent = list(detected_player_cards)
-    dealer_cards_persistent = list(detected_dealer_cards)
+    # Let the GameSession ingest current detections (it will manage hands / splits)
+    session.assign_detected_cards(list(detected_player_cards), list(detected_dealer_cards))
+
+    # NOTE: keep legacy decay counters based on raw detections, but expose the
+    # session's aggregated view for counting and UI.
+    player_cards_persistent = session.get_all_player_cards()
+    dealer_cards_persistent = session.get_dealer_cards()
 
     for card in list(player_seen_counter):
         if card not in detected_player_cards:
@@ -52,9 +216,48 @@ def update_card_tracking(detections, frame_width):
 
     player_cards_persistent = [c for c in player_cards_persistent if player_seen_counter.get(c, 0) < DECAY_LIMIT]
     dealer_cards_persistent = [c for c in dealer_cards_persistent if dealer_seen_counter.get(c, 0) < DECAY_LIMIT]
+    # Identify expired cards (seen counter exceeded) and remove from session hands
+    expired_player = [c for c, v in player_seen_counter.items() if v >= DECAY_LIMIT]
+    expired_dealer = [c for c, v in dealer_seen_counter.items() if v >= DECAY_LIMIT]
 
+    # Remove expired player cards from any player hands
+    for c in expired_player:
+        for h in session.player_hands:
+            if c in h.cards:
+                h.remove_card(c)
+        # also drop from seen counter
+        player_seen_counter.pop(c, None)
+
+    # Remove expired dealer cards from dealer hand
+    for c in expired_dealer:
+        if session.dealer_hand and c in session.dealer_hand.cards:
+            session.dealer_hand.remove_card(c)
+        dealer_seen_counter.pop(c, None)
+
+    # Rebuild persistent lists from session after removals
+    player_cards_persistent = session.get_all_player_cards()
+    dealer_cards_persistent = session.get_dealer_cards()
+
+    # Clean up seen counters to keep only relevant keys
     player_seen_counter = {k: v for k, v in player_seen_counter.items() if k in player_cards_persistent or v < DECAY_LIMIT}
     dealer_seen_counter = {k: v for k, v in dealer_seen_counter.items() if k in dealer_cards_persistent or v < DECAY_LIMIT}
+
+    # If both sides are empty, reset session
+    if not player_cards_persistent and not dealer_cards_persistent:
+        session.reset()
+        # Clear last published outcome so next round can publish again
+        try:
+            global last_published_outcome
+            last_published_outcome = None
+            session.outcome_published = False
+            save_game_stats()
+        except Exception:
+            pass
+    # Persist current phase and leader for the web UI
+    try:
+        save_game_stats()
+    except Exception:
+        pass
 
     globals()["player_cards_persistent"] = player_cards_persistent
     globals()["dealer_cards_persistent"] = dealer_cards_persistent
@@ -101,12 +304,14 @@ def compute_counts(num_decks: int = NUM_DECKS) -> dict:
 
 def compute_strategy():
     """Compute Basic Strategy recommendation."""
-    if not player_cards_persistent or not dealer_cards_persistent:
-        return "Waiting for cards..."
-
+    # Prefer the active player hand when available (handles splits)
     try:
-        strategy = bj.basic_strategy(player_cards_persistent, dealer_cards_persistent)
-        return strategy
+        active = session.get_active_hand()
+        if active and session.get_dealer_cards():
+            return bj.basic_strategy(active.cards, session.get_dealer_cards())
+        if not player_cards_persistent or not dealer_cards_persistent:
+            return "Waiting for cards..."
+        return bj.basic_strategy(player_cards_persistent, dealer_cards_persistent)
     except Exception as e:
         print(f"[STRATEGY] Error: {e}")
         return "Error"
@@ -127,6 +332,9 @@ def update_text_files():
 
         with open(OUTPUT_DIR / "latest.txt", "w") as f:
             f.write(strategy)
+
+        # Publish outcomes if game is complete
+        check_and_publish_outcomes()
 
         with open(OUTPUT_DIR / "player_cards.txt", "w") as f:
             f.write(", ".join(player_cards_persistent) if player_cards_persistent else "No cards")

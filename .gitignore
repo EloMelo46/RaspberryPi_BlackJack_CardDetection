@@ -5,4 +5,5 @@ venv_bj/
 hailo-rpi5-examples/
 outputs/
 hailort.log/
+tests/
 
