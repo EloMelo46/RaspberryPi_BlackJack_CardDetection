@@ -35,3 +35,6 @@ CARD_LABELS = [
 
 # Default number of decks (can be overridden by CLI in main)
 NUM_DECKS = 1
+
+# Commentary frequency (can be overridden by CLI): wenig | mittel | staendig
+COMMENTARY_FREQUENCY = "mittel"

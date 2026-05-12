@@ -8,6 +8,10 @@ itsdangerous==2.2.0
 click==8.3.1
 MarkupSafe==3.0.3
 
+# OpenAI API (for LLM commentary and TTS)
+openai>=1.0.0
+python-dotenv>=1.0.0
+
 # Raspberry Pi & Camera Support
 picamera2==0.3.31
 

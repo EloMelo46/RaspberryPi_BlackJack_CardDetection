@@ -49,6 +49,34 @@ def save_game_stats():
         except Exception:
             game_stats["round_phase"] = "unknown"
             game_stats["current_leader"] = "unknown"
+        # Add player hands summary (id, status, points, type, cards)
+        try:
+            ph_summary = []
+            for h in session.player_hands:
+                try:
+                    htype, hval = bj.hand_type(h.cards)
+                except Exception:
+                    htype, hval = None, None
+                ph_summary.append({"id": h.id, "status": h.status, "points": hval, "type": htype, "cards": h.cards})
+            game_stats["player_hands"] = ph_summary
+        except Exception:
+            game_stats["player_hands"] = []
+
+        # Dealer hand summary (points and type)
+        try:
+            if session.dealer_hand:
+                dtype, dval = bj.hand_type(session.dealer_hand.cards)
+                game_stats["dealer_hand"] = {"points": dval, "type": dtype, "cards": session.dealer_hand.cards}
+            else:
+                game_stats["dealer_hand"] = None
+        except Exception:
+            game_stats["dealer_hand"] = None
+
+        # Add card counting summary if available
+        try:
+            game_stats["counts"] = compute_counts()
+        except Exception:
+            game_stats["counts"] = {}
         with open(stats_file, "w") as f:
             json.dump(game_stats, f, indent=2)
     except Exception as e:
@@ -350,6 +378,90 @@ def update_text_files():
             print(f"[OUTPUT] Failed to write card_counts.json: {e}")
     except Exception as e:
         print(f"[OUTPUT] Error writing text files: {e}")
+
+
+def get_game_state_dict() -> dict:
+    """
+    Return a serializable dict representing the current game state.
+    Uses the in-memory GameSession and existing helpers to avoid file I/O
+    and race conditions.
+    """
+    try:
+        # Basic card lists
+        player_cards = session.get_all_player_cards()
+        dealer_cards = session.get_dealer_cards()
+
+        # Active hand and dealer info
+        active = session.get_active_hand()
+        player_score = active.value() if active else None
+        dealer_score = session.dealer_hand.value() if session.dealer_hand and len(session.dealer_hand.cards) >= 2 else None
+        dealer_upcard = dealer_cards[0] if dealer_cards else None
+
+        # Per-hand breakdown
+        player_hands = []
+        for h in session.player_hands:
+            player_hands.append({
+                "id": h.id,
+                "cards": list(h.cards),
+                "value": h.value(),
+                "status": h.status,
+            })
+
+        # Counts and strategy
+        counts = compute_counts()
+        strategy = compute_strategy()
+
+        # Winner / outcomes (if round complete)
+        winner = None
+        outcomes = []
+        if session.phase == "complete":
+            outcomes = session.compute_outcomes()
+            wins = sum(1 for o in outcomes if o.get("result", "").startswith("win"))
+            loses = sum(1 for o in outcomes if o.get("result") == "lose")
+            pushes = sum(1 for o in outcomes if o.get("result") == "push")
+            if wins > loses:
+                winner = "player"
+            elif loses > wins:
+                winner = "dealer"
+            elif pushes and not wins and not loses:
+                winner = "push"
+
+        # Round id / minimal metadata
+        round_id = getattr(session, "next_hand_id", None)
+        stats_snapshot = {
+            "player_wins": game_stats.get("player_wins", 0),
+            "dealer_wins": game_stats.get("dealer_wins", 0),
+            "pushes": game_stats.get("pushes", 0),
+            "blackjacks": game_stats.get("blackjacks", 0),
+            "last_outcome": game_stats.get("last_outcome"),
+        }
+
+        state = {
+            "player_cards": player_cards,
+            "dealer_cards": dealer_cards,
+            "player_hands": player_hands,
+            "player_score": player_score,
+            "dealer_score": dealer_score,
+            "dealer_upcard": dealer_upcard,
+            "phase": session.phase,
+            "winner": winner,
+            "outcomes": outcomes,
+            "recommended_action": strategy,
+            "running_count": counts.get("running_count"),
+            "true_count": counts.get("true_count"),
+            "counts_decks": counts.get("decks"),
+            "round_id": round_id,
+            "stats": stats_snapshot,
+        }
+        return state
+    except Exception as e:
+        # return minimal state on error
+        return {
+            "player_cards": player_cards if 'player_cards' in locals() else [],
+            "dealer_cards": dealer_cards if 'dealer_cards' in locals() else [],
+            "phase": getattr(session, "phase", "unknown"),
+            "error": str(e),
+        }
 
 
 def annotate_frame(frame, detections, frame_width):
