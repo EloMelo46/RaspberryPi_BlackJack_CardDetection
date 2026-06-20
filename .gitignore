@@ -5,7 +5,7 @@ venv_bj/
 hailo-rpi5-examples/
 outputs/
 commentary_output/
-hailort.log/
+hailort.log
 tests/
 
 # Environment variables

@@ -60,7 +60,6 @@ class HailoCardDetector:
             for out in self.infer_model.outputs
         }
 
-        # Pair the 3 box/class output heads exactly like the working diagnostic script.
         self.head_meta = {}
         outputs_by_shape = {tuple(o.shape): o for o in self.infer_model.outputs}
         paired_shapes = [

@@ -20,6 +20,7 @@ import subprocess
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
+import math
 
 from openai import OpenAI
 
@@ -28,11 +29,12 @@ class CommentaryEngine:
     def __init__(
         self,
         output_dir: str = "commentary_output",
-        text_model: str = "gpt-5.4-mini",
+        text_model: str = "gpt-5.4",
         tts_model: str = "gpt-4o-mini-tts",
-        voice: str = "echo",
+        voice: str = "alloy",
         cooldown_seconds: float = 10.0,
         enable_audio: bool = True,
+        enable_deduplication: bool = True,
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +44,7 @@ class CommentaryEngine:
         self.voice = voice
         self.cooldown_seconds = cooldown_seconds
         self.enable_audio = enable_audio
+        self.enable_deduplication = enable_deduplication
 
         self.client = OpenAI()
 
@@ -51,6 +54,11 @@ class CommentaryEngine:
         self._playback_lock = threading.Lock()
         self._current_player_proc = None
         self._last_played_audio_mtime: float = 0.0
+        
+        # Comment history for context & deduplication
+        self.comment_history: list[str] = []
+        self.max_history = 10
+        self.similarity_threshold = 0.80  # 0-1, higher = stricter duplicate detection
 
     @staticmethod
     def frequency_to_cooldown(frequency: str) -> float:
@@ -61,6 +69,68 @@ class CommentaryEngine:
         if f in {"staendig", "ständig", "high"}:
             return 2.0
         return 6.0
+
+    def _cosine_similarity(self, vec_a: list[float], vec_b: list[float]) -> float:
+        """Compute cosine similarity between two embedding vectors."""
+        if not vec_a or not vec_b:
+            return 0.0
+        dot = sum(a * b for a, b in zip(vec_a, vec_b))
+        mag_a = math.sqrt(sum(x * x for x in vec_a))
+        mag_b = math.sqrt(sum(x * x for x in vec_b))
+        if mag_a == 0 or mag_b == 0:
+            return 0.0
+        return dot / (mag_a * mag_b)
+
+    def add_to_history(self, comment: str):
+        """Add comment to history, maintaining max size."""
+        self.comment_history.append(comment)
+        if len(self.comment_history) > self.max_history:
+            self.comment_history.pop(0)
+
+    def _get_embedding(self, text: str) -> Optional[list[float]]:
+        """Get embedding for text using OpenAI API."""
+        try:
+            response = self.client.embeddings.create(
+                model="text-embedding-3-small",
+                input=text
+            )
+            return response.data[0].embedding
+        except Exception:
+            return None
+
+    def _is_too_similar(self, new_comment: str) -> bool:
+        """Check if new comment is too similar to recent history."""
+        if not self.comment_history:
+            return False
+        
+        new_embedding = self._get_embedding(new_comment)
+        if new_embedding is None:
+            return False
+        
+        # Check only last 5 comments for efficiency
+        for past_comment in self.comment_history[-5:]:
+            past_embedding = self._get_embedding(past_comment)
+            if past_embedding is None:
+                continue
+            
+            similarity = self._cosine_similarity(new_embedding, past_embedding)
+            if similarity > self.similarity_threshold:
+                return True
+        
+        return False
+
+    def _get_history_context_text(self) -> str:
+        """Generate history context for prompt."""
+        if not self.comment_history:
+            return ""
+        
+        recent = self.comment_history[-5:]
+        history_text = "\n".join(f"- {c}" for c in recent)
+        return f"""\nDEINE LETZTEN KOMMENTARE (BITTE NICHT WIEDERHOLEN!):
+{history_text}
+
+Variiere Deinen Stil und sag etwas NEUES!
+"""
 
     def set_frequency(self, frequency: str):
         self.cooldown_seconds = self.frequency_to_cooldown(frequency)
@@ -91,9 +161,16 @@ class CommentaryEngine:
         self.last_comment_time = now
         return True
 
+    def should_play_comment(self, comment: str) -> bool:
+        """Check if comment should be played (not too similar to history)."""
+        if not self.enable_deduplication or not comment:
+            return True
+        return not self._is_too_similar(comment)
+
     def build_prompt(self, state: Dict[str, Any]) -> str:
+        history_context = self._get_history_context_text() if self.enable_deduplication else ""
         return f"""
-Du bist ein lustiger, enthusiastischer, sarkastischer Blackjack-Kommentator!
+Du bist ein professioneller Blackjack-Kommentator!{history_context}
 
 Du kennst die Bedeutung dieses Game-State-JSON:
 
@@ -126,19 +203,15 @@ Karten-Codes:
 - K = König
 
 Aufgabe:
-Kommentiere den aktuellen Spielzustand in genau einem kurzen Satz wie ein Komiker.
+Kommentiere den aktuellen Spielzustand in genau einem kurzen Satz.
 
 Regeln:
 - Antworte und reagiere blitzschnell.
-- Maximal 10 Wörter.
 - Keine langen Erklärungen.
 - Keine Strategie-Tabelle.
 - Kein Markdown.
 - Kein Emoji.
-- Humorvoll, aber nicht beleidigend.
 - Du beobachtest das Spiel wie ein Sportkommentator.
-- Wenn der Spieler schlecht steht, darfst du trocken sarkastisch sein.
-- Wenn der Spieler gut steht, darfst du übertrieben dramatisch loben.
 - Nutze die Werte aus dem JSON korrekt.
 - Erfinde keine Karten oder Spielstände dazu.
 
@@ -229,6 +302,14 @@ Spielzustand:
         comment = self.generate_text_comment(state)
         if not comment:
             return None
+        
+        # Check if comment is too similar to history
+        if not self.should_play_comment(comment):
+            return None
+        
+        # Add to history for future context
+        self.add_to_history(comment)
+        
         self.save_text_comment(comment)
         if self.enable_audio:
             self.generate_audio(comment)

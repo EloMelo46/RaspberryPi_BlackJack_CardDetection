@@ -1,11 +1,14 @@
 # Blackjack Card Detection & Strategy Assistant
 
-A real-time Blackjack assistant for Raspberry Pi using the **Hailo 10H AI Accelerator**. The system detects playing cards in real-time, tracks them for the player and dealer, and provides optimal "Basic Strategy" recommendations via a web dashboard.
+A real-time Blackjack assistant for Raspberry Pi using the **Hailo 10H AI Accelerator**. The system captures the full 12MP camera image, lets you define smaller player/dealer ROIs in a web UI, runs card detection inside those ROIs, and provides Blackjack recommendations, card counting, and per-player scoring.
 
 ## Features
-- **Real-time Detection**: Card recognition using YOLOv26 on Hailo 10H AI accelerator (2 TOPS).
-- **Strategy Engine**: Automatic calculation of Hit, Stand, Double, or Split via Basic Strategy.
-- **Web Dashboard**: Live camera stream and dynamic game state visualization.
+- **Full-frame Capture, ROI Detection**: Uses the full 4056x3040 camera frame as the source image while detecting cards in smaller 640x480 player/dealer ROIs.
+- **Multi-player Table Setup**: Define named player boxes and a dealer box directly in the browser; drag boxes on top of the live video.
+- **Strategy Engine**: Automatic recommendation for the active player using detected player cards and dealer cards.
+- **Card Counting**: Global Hi-Lo True Count across all visible player/dealer ROIs, with configurable shoe deck count.
+- **Scoring Flow**: Tracks wins, losses, pushes, score, blackjacks, doubles, and split hands per player.
+- **Web Dashboard**: Desktop and mobile-friendly live camera stream, ROI controls, active player selection, recommendations, and score dashboard.
 - **Edge Optimized**: Specifically designed for Hailo 10H hardware with native HEF model loading.
 - **Camera Support**: Raspberry Pi camera (picamera2) with USB fallback support.
 
@@ -55,14 +58,14 @@ sudo apt-get install -y libcamera-dev
 
 ## Usage
 
-### Start Card Detection & Web Server
+### Start Card Detection
 ```bash
 source venv_bj/bin/activate
 
-# Default: 1 deck (for True Count calculation)
+# Uses saved deck count from the web UI, or default 1 deck
 python main.py
 
-# Or specify deck count
+# Optional: explicitly set and save deck count for True Count
 python main.py --decks 6
 ```
 
@@ -73,6 +76,8 @@ Expected output:
 [CAMERA] Raspberry Pi Camera initialized successfully
 [HAILO] Loading HEF model from ./yolo26m.hef
 [HAILO] Model loaded successfully
+[INIT] Setup incomplete: Dealer ROI missing
+[INIT] Starting camera stream anyway so ROIs can be defined in the web UI.
 [INIT] Ready. Press 'q' to quit.
 ```
 
@@ -88,12 +93,24 @@ Open browser and navigate to:
 http://<raspberry-pi-ip>:5000
 ```
 
+### Deck ROI Mode
+
+The web dashboard is the table setup and gameplay controller:
+- Enter the number of players and player names, then click **Create player boxes**.
+- Add or replace a dealer ROI with **Add dealer**.
+- Drag the 640x480 ROI boxes on top of the full camera image.
+- Click a player box or player row to select the active player.
+- Set the number of decks in the shoe with **Set decks** so True Count is correct.
+- Use **Fullscreen** on desktop/mobile for a cleaner play view.
+- ROI layouts are stored in `outputs/decks.json`; runtime state is stored separately.
+
 You'll see:
-- **Live camera feed** with detected cards and annotations
-- **Player cards** (left side, green boxes)
-- **Dealer cards** (right side, red boxes)
-- **Hi-Lo True Count** (displayed on frame)
-- **Strategy recommendation** (Hit/Stand/Double/Split based on Basic Strategy)
+- **Live camera feed** downscaled for the browser while detection still uses full-resolution ROI crops
+- **Player/dealer ROI overlays** on the full table image
+- **Active-player recommendation** for the selected player
+- **True Count** and count meaning, e.g. high/low cards expected
+- **Wins / Pushes / Losses / Score** for the selected player
+- **Split and Double controls** for cases that need manual player decisions
 
 ## Project Structure
 ```
@@ -104,6 +121,8 @@ RaspberryPi_BlackJack_CardDetection/
 ├── hailo_inference.py           # Hailo detector class & inference
 ├── preprocessing.py             # Image processing (letterbox, NMS, etc.)
 ├── postprocessing.py            # Card tracking, counting, annotation
+├── deck_config.py               # Persistent player/dealer ROI config
+├── deck_manager.py              # Per-ROI card state, scoring helpers, count summary
 ├── card_logic.py                # Blackjack Basic Strategy engine
 ├── websocket.py                 # Flask web UI server
 ├── cards.yaml                   # Dataset config (reference)
@@ -117,28 +136,44 @@ RaspberryPi_BlackJack_CardDetection/
 
 ### 1. Camera Capture
 - Captures frames from Raspberry Pi camera (picamera2) or USB camera
-- Default resolution: 640x480 @ 20 FPS
+- Default Raspberry Pi camera resolution: 4056x3040 @ target 20 FPS
+- Browser stream is saved separately as a downscaled Full HD JPEG for smoother web UI FPS
 
 ### 2. Hailo Inference
 - Loads `yolo26m.hef` model into VDevice
-- Runs YOLOv26 object detection
+- Runs YOLOv26 object detection on each configured ROI, not the whole 12MP frame
+- Each ROI defaults to 640x480 but is cropped from the full-resolution source frame
 - Outputs: bounding boxes, class IDs, confidence scores
 
-### 3. Card Tracking
-- **Memory Decay System**: Cards persisted for 20 frames if not detected
-- **Player/Dealer Classification**: Divided by vertical center line
+### 3. ROI and Card Tracking
+- `outputs/decks.json` stores persistent player/dealer ROI boxes and active player ID
+- `outputs/deck_state.json` stores runtime card state, recommendations, counts, and per-player stats
+- `outputs/decks.bak.json` is written as a backup before ROI config is replaced
+- **Memory Decay System**: Cards persist for `DECAY_LIMIT` frames if not detected again
+- **Player/Dealer Classification**: Based on explicitly configured ROIs
 - **Best Detection**: Only highest confidence box per card class
 
 ### 4. Strategy Calculation
 - Uses **Blackjack Basic Strategy** (4-8 Deck, Dealer Hits Soft 17)
-- Takes player cards + dealer upcard as input
+- Takes active player's cards + dealer cards as input
 - Returns: Hit, Stand, Double, or Split
 
-### 5. Web Output
+### 5. Counting and Scoring
+- Uses Hi-Lo card counting over all visible player/dealer ROIs
+- Displays only True Count in the UI
+- Deck count can be set in the web UI or via `python main.py --decks N`
+- Scores players when the dealer reaches terminal state: dealer stands at 17+ or busts
+- Blackjack wins count as +2
+- Marked doubles score double in either direction
+- Split flow is guided with Start Split, Next Hand, Finish Split, and Cancel Split controls
+- Current-round undo is kept internal, but not exposed as a normal gameplay button
+
+### 6. Web Output
 - Saves frame: `latest.jpg`
+- Saves browser frame: `latest_web.jpg`
 - Saves strategy: `latest.txt`
-- Saves cards: `player_cards.txt`, `dealer_cards.txt`
-- Flask server serves these to web dashboard
+- Saves cards, counts, deck state, and player stats in `outputs/`
+- Flask server serves the dashboard and JSON endpoints
 
 ## Configuration
 
@@ -151,14 +186,32 @@ DECAY_LIMIT = 50                          # Frames until card removal
 NMS_IOU_THRESHOLD = 0.45                  # NMS threshold
 MAX_DETECTIONS_PER_CLASS = 1              # Max detections per card
 FPS = 20                                  # Target frame rate
-FRAME_WIDTH = 640                         # Camera resolution
-FRAME_HEIGHT = 480
-NUM_DECKS = 1                             # Default decks (override with --decks)
+FRAME_WIDTH = 4056                        # Full camera source width
+FRAME_HEIGHT = 3040                       # Full camera source height
+WEB_STREAM_MAX_WIDTH = 1920               # Browser stream max width
+WEB_STREAM_MAX_HEIGHT = 1080              # Browser stream max height
+WEB_STREAM_JPEG_QUALITY = 82              # Browser stream JPEG quality
+NUM_DECKS = 1                             # Default decks for True Count
 ```
 
-Or override deck count at runtime:
+Set deck count in the web UI, or override it at startup:
 ```bash
 python main.py --decks 6  # For True Count in 6-deck shoe
+```
+
+## Runtime Files
+
+The following files are generated under `outputs/` and are intentionally ignored by Git:
+
+```text
+outputs/decks.json         # Persistent player/dealer ROI layout
+outputs/decks.bak.json     # Backup of previous ROI layout
+outputs/deck_count.json    # Shoe deck count for True Count
+outputs/deck_state.json    # Current runtime deck/card state
+outputs/player_stats.json  # Per-player score and result history
+outputs/card_counts.json   # Current Hi-Lo count summary
+outputs/latest.jpg         # Full annotated frame
+outputs/latest_web.jpg     # Downscaled browser frame
 ```
 
 ## Troubleshooting

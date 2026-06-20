@@ -1,9 +1,14 @@
 import cv2
 import json
-from config import OUTPUT_DIR, CARD_LABELS, DECAY_LIMIT, NUM_DECKS
+import config
+from config import OUTPUT_DIR, CARD_LABELS, DECAY_LIMIT
 import card_logic as bj
 from preprocessing import limit_detections_per_class
 from game_state import GameSession
+from deck_manager import best_hand_value, registry
+from deck_config import DECK_STATE_PATH
+
+deck_registry = registry
 
 # Persistent state
 player_cards_persistent = []
@@ -23,6 +28,511 @@ game_stats = {
     "last_outcome": None,
 }
 last_published_outcome = None
+PLAYER_STATS_PATH = OUTPUT_DIR / "player_stats.json"
+DECK_COUNT_PATH = OUTPUT_DIR / "deck_count.json"
+player_stats = {}
+round_locked = False
+no_detection_frames = 0
+EMPTY_ROUND_RESET_FRAMES = 5
+
+
+def load_deck_count() -> int:
+    try:
+        raw = json.loads(DECK_COUNT_PATH.read_text())
+        decks = int(raw.get("decks", config.NUM_DECKS))
+    except Exception:
+        decks = int(getattr(config, "NUM_DECKS", 1) or 1)
+    return max(1, min(decks, 12))
+
+
+def save_deck_count(decks: int) -> int:
+    deck_count = max(1, min(int(decks), 12))
+    config.NUM_DECKS = deck_count
+    try:
+        DECK_COUNT_PATH.write_text(json.dumps({"decks": deck_count}, indent=2))
+    except Exception as e:
+        print(f"[COUNT] Failed to write deck count: {e}")
+    return deck_count
+
+
+def _deck_summary() -> dict:
+    try:
+        _refresh_player_stats()
+        summary = registry.summary(num_decks=load_deck_count())
+        for deck in summary.get("decks", []):
+            if str(deck.get("role", "")).lower() != "dealer":
+                deck["stats"] = player_stats.get(deck.get("deck_id"), {
+                    "name": deck.get("name"),
+                    "score": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "pushes": 0,
+                    "rounds": 0,
+                    "blackjacks": 0,
+                    "doubles": 0,
+                    "splits": 0,
+                    "history": [],
+                })
+        active = summary.get("active_deck") or {}
+        active_id = active.get("deck_id")
+        if active_id:
+            active["stats"] = player_stats.get(active_id, {
+                "name": active.get("name"),
+                "score": 0,
+                "wins": 0,
+                "losses": 0,
+                "pushes": 0,
+                "rounds": 0,
+                "blackjacks": 0,
+                "doubles": 0,
+                "splits": 0,
+                "history": [],
+            })
+        summary["player_stats"] = player_stats
+        return summary
+    except Exception:
+        return {"active_deck_id": None, "decks": [], "active_deck": None, "running_count": 0, "true_count": 0.0}
+
+
+def load_player_stats() -> dict:
+    if not PLAYER_STATS_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(PLAYER_STATS_PATH.read_text())
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _refresh_player_stats() -> None:
+    global player_stats
+    player_stats = load_player_stats()
+
+
+def save_player_stats() -> None:
+    try:
+        PLAYER_STATS_PATH.write_text(json.dumps(player_stats, indent=2))
+    except Exception as e:
+        print(f"[STATS] Failed to write player stats: {e}")
+
+
+def reset_player_stats() -> None:
+    global player_stats, round_locked, no_detection_frames
+    player_stats = {}
+    round_locked = False
+    no_detection_frames = 0
+    save_player_stats()
+
+
+def _reset_round_state() -> None:
+    global round_locked
+    round_locked = False
+    _refresh_player_stats()
+    changed = False
+    for stats in player_stats.values():
+        if stats.get("current_double") or stats.get("split_session") or stats.get("current_event"):
+            stats["current_double"] = False
+            stats["split_session"] = None
+            stats["current_event"] = None
+            changed = True
+    if changed:
+        save_player_stats()
+    registry.clear()
+    session.reset()
+
+
+def _snapshot_deck_cards() -> dict:
+    return {
+        deck_id: {
+            "name": state.deck.name,
+            "role": state.deck.role,
+            "cards": list(state.cards),
+        }
+        for deck_id, state in registry.states.items()
+    }
+
+
+def _default_player_stats(name: str) -> dict:
+    return {
+        "name": name,
+        "score": 0,
+        "wins": 0,
+        "losses": 0,
+        "pushes": 0,
+        "rounds": 0,
+        "blackjacks": 0,
+        "doubles": 0,
+        "splits": 0,
+        "current_double": False,
+        "split_session": None,
+        "current_event": None,
+        "history": [],
+    }
+
+
+def _get_player_stats(deck_id: str, name: str) -> dict:
+    _refresh_player_stats()
+    stats = player_stats.setdefault(deck_id, _default_player_stats(name or deck_id))
+    defaults = _default_player_stats(name or deck_id)
+    for key, value in defaults.items():
+        stats.setdefault(key, value)
+    stats["name"] = name or deck_id
+    return stats
+
+
+def _append_score_event(deck_id: str, name: str, delta: int, event: str, result: str = "manual") -> dict:
+    stats = _get_player_stats(deck_id, name)
+    stats["score"] = int(stats.get("score", 0)) + int(delta)
+    if result == "win":
+        stats["wins"] = int(stats.get("wins", 0)) + 1
+    elif result == "loss":
+        stats["losses"] = int(stats.get("losses", 0)) + 1
+    elif result == "push":
+        stats["pushes"] = int(stats.get("pushes", 0)) + 1
+    if event == "blackjack":
+        stats["blackjacks"] = int(stats.get("blackjacks", 0)) + 1
+    elif event == "double":
+        stats["doubles"] = int(stats.get("doubles", 0)) + 1
+    elif event.startswith("split"):
+        stats["splits"] = int(stats.get("splits", 0)) + 1
+    if result in {"win", "loss", "push"} and (not event.startswith("split") or event == "split_auto"):
+        stats["rounds"] = int(stats.get("rounds", 0)) + 1
+
+    history = list(stats.get("history", []))
+    history.append({"delta": int(delta), "event": event, "result": result})
+    stats["history"] = history[-50:]
+    stats["current_event"] = {"delta": int(delta), "event": event, "result": result}
+    save_player_stats()
+    return stats
+
+
+def _undo_current_event(stats: dict) -> None:
+    current = stats.get("current_event")
+    if not current:
+        return
+    history = list(stats.get("history", []))
+    if history and history[-1] == current:
+        history.pop()
+    stats["score"] = int(stats.get("score", 0)) - int(current.get("delta", 0))
+    result = current.get("result")
+    event = current.get("event", "")
+    if result == "win":
+        stats["wins"] = max(0, int(stats.get("wins", 0)) - 1)
+    elif result == "loss":
+        stats["losses"] = max(0, int(stats.get("losses", 0)) - 1)
+    elif result == "push":
+        stats["pushes"] = max(0, int(stats.get("pushes", 0)) - 1)
+    if event == "blackjack":
+        stats["blackjacks"] = max(0, int(stats.get("blackjacks", 0)) - 1)
+    elif event == "double":
+        stats["doubles"] = max(0, int(stats.get("doubles", 0)) - 1)
+    elif str(event).startswith("split"):
+        stats["splits"] = max(0, int(stats.get("splits", 0)) - 1)
+    if result in {"win", "loss", "push"} and (not str(event).startswith("split") or event == "split_auto"):
+        stats["rounds"] = max(0, int(stats.get("rounds", 0)) - 1)
+    stats["history"] = history
+    stats["current_event"] = None
+
+
+def _split_session_cards(session: dict) -> set:
+    cards = set()
+    for hand in session.get("hands", []):
+        cards.update(hand.get("cards", []))
+    return cards
+
+
+def _update_split_session(deck_id: str, visible_cards: list[str]) -> None:
+    state = registry.states.get(deck_id)
+    if state is None:
+        return
+    stats = _get_player_stats(deck_id, state.deck.name)
+    session = stats.get("split_session")
+    if not session or session.get("finished"):
+        return
+    hands = session.get("hands", [])
+    active_idx = int(session.get("active_index", 0))
+    if active_idx < 0 or active_idx >= len(hands):
+        return
+    assigned = _split_session_cards(session)
+    for card in visible_cards:
+        if card not in assigned:
+            hands[active_idx].setdefault("cards", []).append(card)
+            assigned.add(card)
+    session["hands"] = hands
+    stats["split_session"] = session
+    save_player_stats()
+
+
+def _score_single_hand(cards: list[str], dealer_value: int, dealer_bust: bool, dealer_blackjack: bool) -> tuple[int, str]:
+    player_value = best_hand_value(cards)
+    player_bust = player_value > 21
+    player_blackjack = _is_blackjack(cards)
+    if player_blackjack and not dealer_blackjack:
+        return 2, "win"
+    if player_blackjack and dealer_blackjack:
+        return 0, "push"
+    if player_bust:
+        return -1, "loss"
+    if dealer_bust or player_value > dealer_value:
+        return 1, "win"
+    if player_value == dealer_value:
+        return 0, "push"
+    return -1, "loss"
+
+
+def _append_split_score_event(deck_id: str, name: str, hand_results: list[dict]) -> dict:
+    stats = _get_player_stats(deck_id, name)
+    delta = int(sum(item.get("delta", 0) for item in hand_results))
+    stats["score"] = int(stats.get("score", 0)) + delta
+    stats["wins"] = int(stats.get("wins", 0)) + sum(1 for item in hand_results if item.get("result") == "win")
+    stats["losses"] = int(stats.get("losses", 0)) + sum(1 for item in hand_results if item.get("result") == "loss")
+    stats["pushes"] = int(stats.get("pushes", 0)) + sum(1 for item in hand_results if item.get("result") == "push")
+    stats["splits"] = int(stats.get("splits", 0)) + 1
+    stats["rounds"] = int(stats.get("rounds", 0)) + 1
+    if delta > 0:
+        result = "win"
+    elif delta < 0:
+        result = "loss"
+    else:
+        result = "push"
+    event = {"delta": delta, "event": "split_auto", "result": result, "hands": hand_results}
+    history = list(stats.get("history", []))
+    history.append(event)
+    stats["history"] = history[-50:]
+    stats["current_event"] = event
+    save_player_stats()
+    return stats
+
+
+def apply_manual_score(deck_id: str, action: str, points: int = 0) -> dict:
+    state = registry.states.get(deck_id)
+    if state is None or state.deck.is_dealer():
+        return {"ok": False, "error": "player not found"}
+
+    stats = _get_player_stats(deck_id, state.deck.name)
+
+    if action == "double":
+        if stats.get("current_event") or stats.get("split_session"):
+            return {"ok": False, "error": "round already scored"}
+        stats["current_double"] = not bool(stats.get("current_double"))
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "start_split":
+        if stats.get("current_event") or stats.get("split_session"):
+            return {"ok": False, "error": "round already has a split or score"}
+        cards = list(state.cards)
+        if len(cards) != 2:
+            return {"ok": False, "error": "split requires exactly two visible cards"}
+        try:
+            if bj.normalize_card(cards[0]) != bj.normalize_card(cards[1]):
+                return {"ok": False, "error": "split requires a visible pair"}
+        except Exception:
+            return {"ok": False, "error": "split requires a visible pair"}
+        stats["current_double"] = False
+        stats["split_session"] = {
+            "active_index": 0,
+            "finished": False,
+            "hands": [
+                {"label": "A", "cards": [cards[0]], "stopped": False},
+                {"label": "B", "cards": [cards[1]], "stopped": False},
+            ],
+        }
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "next_split_hand":
+        session = stats.get("split_session")
+        if not session:
+            return {"ok": False, "error": "no split in progress"}
+        active_idx = int(session.get("active_index", 0))
+        hands = session.get("hands", [])
+        if 0 <= active_idx < len(hands):
+            hands[active_idx]["stopped"] = True
+        session["hands"] = hands
+        session["active_index"] = min(active_idx + 1, len(hands) - 1)
+        stats["split_session"] = session
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "finish_split":
+        session = stats.get("split_session")
+        if not session:
+            return {"ok": False, "error": "no split in progress"}
+        active_idx = int(session.get("active_index", 0))
+        hands = session.get("hands", [])
+        if 0 <= active_idx < len(hands):
+            hands[active_idx]["stopped"] = True
+        session["hands"] = hands
+        session["finished"] = True
+        stats["split_session"] = session
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "cancel_split":
+        stats["split_session"] = None
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "undo_current":
+        stats = _get_player_stats(deck_id, state.deck.name)
+        _undo_current_event(stats)
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    if action == "clear_round_flags":
+        stats["current_double"] = False
+        stats["current_event"] = None
+        stats["split_session"] = None
+        save_player_stats()
+        return {"ok": True, "stats": stats}
+
+    return {"ok": False, "error": "unknown score action"}
+
+
+def _is_blackjack(cards: list[str]) -> bool:
+    return len(cards) == 2 and best_hand_value(cards) == 21
+
+
+def _publish_round_if_dealer_terminal() -> None:
+    global round_locked
+
+    snapshot = _snapshot_deck_cards()
+    if not any(item["cards"] for item in snapshot.values()):
+        _reset_round_state()
+        return
+
+    if round_locked:
+        return
+
+    dealer = next(
+        (item for item in snapshot.values() if str(item.get("role", "")).lower() == "dealer"),
+        None,
+    )
+    if not dealer or not dealer.get("cards"):
+        return
+
+    dealer_value = best_hand_value(dealer["cards"])
+    if dealer_value < 17:
+        return
+
+    dealer_bust = dealer_value > 21
+    dealer_blackjack = _is_blackjack(dealer["cards"])
+
+    for deck_id, item in snapshot.items():
+        if str(item.get("role", "")).lower() == "dealer" or not item.get("cards"):
+            continue
+
+        stats = _get_player_stats(deck_id, item.get("name") or deck_id)
+        if stats.get("current_event"):
+            continue
+
+        split_session = stats.get("split_session")
+        if split_session:
+            hands = split_session.get("hands", [])
+            results = []
+            for hand in hands:
+                hand_cards = hand.get("cards", [])
+                hand_delta, hand_result = _score_single_hand(hand_cards, dealer_value, dealer_bust, dealer_blackjack)
+                results.append({"label": hand.get("label"), "cards": hand_cards, "delta": hand_delta, "result": hand_result})
+            updated = _append_split_score_event(deck_id, item.get("name") or deck_id, results)
+            updated["split_session"] = None
+            updated["current_double"] = False
+            save_player_stats()
+            continue
+
+        player_value = best_hand_value(item["cards"])
+        player_bust = player_value > 21
+        player_blackjack = _is_blackjack(item["cards"])
+        is_double = bool(stats.get("current_double"))
+        if player_blackjack and not dealer_blackjack:
+            result = "win"
+            delta = 2
+            event = "blackjack"
+        elif player_blackjack and dealer_blackjack:
+            result = "push"
+            delta = 0
+            event = "auto_push"
+        elif player_bust:
+            result = "loss"
+            delta = -2 if is_double else -1
+            event = "double" if is_double else "auto_loss"
+        elif dealer_bust or player_value > dealer_value:
+            result = "win"
+            delta = 2 if is_double else 1
+            event = "double" if is_double else "auto_win"
+        elif player_value == dealer_value:
+            result = "push"
+            delta = 0
+            event = "auto_push"
+        else:
+            result = "loss"
+            delta = -2 if is_double else -1
+            event = "double" if is_double else "auto_loss"
+
+        updated = _append_score_event(deck_id, item.get("name") or deck_id, delta, event, result)
+        updated["current_double"] = False
+        save_player_stats()
+
+    round_locked = True
+
+
+def _sync_active_deck_to_session() -> None:
+    """Expose ROI deck state through the older session/text-file interface."""
+    global player_cards_persistent, dealer_cards_persistent
+
+    active = registry.get_active_state()
+    dealer = registry.dealer_state()
+
+    player_cards_persistent = list(active.cards) if active else []
+    dealer_cards_persistent = list(dealer.cards) if dealer else []
+
+    current_player = session.get_all_player_cards()
+    current_dealer = session.get_dealer_cards()
+    if set(current_player) != set(player_cards_persistent) or set(current_dealer) != set(dealer_cards_persistent):
+        session.reset()
+        if player_cards_persistent or dealer_cards_persistent:
+            session.assign_detected_cards(player_cards_persistent, dealer_cards_persistent)
+
+
+def update_deck_tracking(detections_by_deck: dict, frame_width: int, frame_height: int) -> None:
+    """Update shared deck registry with per-deck detections."""
+    global no_detection_frames
+    try:
+        registry.refresh_from_disk()
+        any_raw_cards = False
+        for deck_id, deck_detections in detections_by_deck.items():
+            cards = []
+            for det in deck_detections:
+                class_id = det.get("class_id")
+                if class_id is None:
+                    continue
+                if 0 <= int(class_id) < len(CARD_LABELS):
+                    cards.append(CARD_LABELS[int(class_id)])
+            if cards:
+                any_raw_cards = True
+            registry.update_deck_cards(deck_id, cards)
+            _update_split_session(deck_id, registry.states.get(deck_id).cards if deck_id in registry.states else cards)
+
+        if any_raw_cards:
+            no_detection_frames = 0
+        else:
+            no_detection_frames += 1
+            if no_detection_frames >= EMPTY_ROUND_RESET_FRAMES:
+                _reset_round_state()
+
+        _sync_active_deck_to_session()
+        _publish_round_if_dealer_terminal()
+    except Exception as e:
+        print(f"[DECK] update_deck_tracking error: {e}")
+
+
+def get_active_deck_state():
+    return registry.get_active_state()
+
+
+def set_active_deck(deck_id: str) -> bool:
+    return registry.set_active_deck(deck_id)
 
 
 def load_game_stats():
@@ -198,6 +708,7 @@ def get_current_leader() -> str:
 
 
 # Load stats on module import
+player_stats = load_player_stats()
 load_game_stats()
 
 
@@ -308,38 +819,24 @@ def card_hi_lo(card_label: str) -> int:
     return -1
 
 
-def compute_counts(num_decks: int = NUM_DECKS) -> dict:
-    """Compute Hi-Lo running and true counts (combined for all cards).
-    
-    Running count: sum of all card values seen
-    True count: running count / decks in shoe (parameter)
-    """
-    all_cards = player_cards_persistent + dealer_cards_persistent
-    running_count = sum(card_hi_lo(c) for c in all_cards)
-    
-    # Avoid division by zero
-    if num_decks <= 0:
-        num_decks = 1
-    
-    true_count = running_count / float(num_decks)
-    
+def compute_counts(num_decks: int = None) -> dict:
+    """Compute Hi-Lo running and true counts from the active deck registry."""
+    if num_decks is None:
+        num_decks = load_deck_count()
+    summary = _deck_summary()
     return {
-        "running_count": int(running_count),
-        "true_count": float(true_count),
-        "decks": int(num_decks),
+        "running_count": int(summary.get("running_count", 0)),
+        "true_count": float(summary.get("true_count", 0.0)),
+        "decks": int(num_decks if num_decks > 0 else 1),
+        "active_deck_id": summary.get("active_deck_id"),
+        "decks_state": summary.get("decks", []),
     }
 
 
 def compute_strategy():
-    """Compute Basic Strategy recommendation."""
-    # Prefer the active player hand when available (handles splits)
+    """Return recommendation for the currently selected deck."""
     try:
-        active = session.get_active_hand()
-        if active and session.get_dealer_cards():
-            return bj.basic_strategy(active.cards, session.get_dealer_cards())
-        if not player_cards_persistent or not dealer_cards_persistent:
-            return "Waiting for cards..."
-        return bj.basic_strategy(player_cards_persistent, dealer_cards_persistent)
+        return registry.get_active_recommendation()
     except Exception as e:
         print(f"[STRATEGY] Error: {e}")
         return "Error"
@@ -348,7 +845,34 @@ def compute_strategy():
 def save_frame_and_info(frame, filename=str(OUTPUT_DIR / "latest.jpg")):
     """Save frame to file for web interface."""
     try:
-        cv2.imwrite(filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        import os
+
+        bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        tmp_filename = f"{filename}.tmp.jpg"
+        ok = cv2.imwrite(tmp_filename, bgr_frame)
+        if ok:
+            os.replace(tmp_filename, filename)
+
+        web_filename = str(OUTPUT_DIR / "latest_web.jpg")
+        max_w = max(1, int(getattr(config, "WEB_STREAM_MAX_WIDTH", 1920)))
+        max_h = max(1, int(getattr(config, "WEB_STREAM_MAX_HEIGHT", 1080)))
+        h, w = bgr_frame.shape[:2]
+        scale = min(max_w / float(w), max_h / float(h), 1.0)
+        if scale < 1.0:
+            web_frame = cv2.resize(
+                bgr_frame,
+                (int(round(w * scale)), int(round(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            web_frame = bgr_frame
+
+        web_tmp_filename = f"{web_filename}.tmp.jpg"
+        quality = int(getattr(config, "WEB_STREAM_JPEG_QUALITY", 82))
+        web_ok = cv2.imwrite(web_tmp_filename, web_frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if web_ok:
+            os.replace(web_tmp_filename, web_filename)
     except Exception as e:
         print(f"[OUTPUT] Failed to save frame: {e}")
 
@@ -376,6 +900,11 @@ def update_text_files():
                 json.dump(counts, jf)
         except Exception as e:
             print(f"[OUTPUT] Failed to write card_counts.json: {e}")
+        try:
+            with open(DECK_STATE_PATH, "w") as jf:
+                json.dump(_deck_summary(), jf, indent=2)
+        except Exception as e:
+            print(f"[OUTPUT] Failed to write deck_state.json: {e}")
     except Exception as e:
         print(f"[OUTPUT] Error writing text files: {e}")
 
@@ -387,6 +916,7 @@ def get_game_state_dict() -> dict:
     and race conditions.
     """
     try:
+        deck_summary = _deck_summary()
         # Basic card lists
         player_cards = session.get_all_player_cards()
         dealer_cards = session.get_dealer_cards()
@@ -452,6 +982,10 @@ def get_game_state_dict() -> dict:
             "counts_decks": counts.get("decks"),
             "round_id": round_id,
             "stats": stats_snapshot,
+            "decks": deck_summary.get("decks", []),
+            "active_deck_id": deck_summary.get("active_deck_id"),
+            "active_deck": deck_summary.get("active_deck"),
+            "player_stats": player_stats,
         }
         return state
     except Exception as e:
@@ -466,10 +1000,32 @@ def get_game_state_dict() -> dict:
 
 def annotate_frame(frame, detections, frame_width):
     """Draw annotations on frame."""
-    middle_x = frame_width // 2
     h, w = frame.shape[:2]
+    deck_summary = _deck_summary()
+    active_deck_id = deck_summary.get("active_deck_id")
+    dealer_state = registry.dealer_state()
+    dealer_id = dealer_state.deck.deck_id if dealer_state else None
 
-    cv2.line(frame, (middle_x, 0), (middle_x, h), (255, 255, 255), 2)
+    for deck in deck_summary.get("decks", []):
+        if not deck.get("enabled", True):
+            continue
+        x = int(deck.get("x", 0))
+        y = int(deck.get("y", 0))
+        width = int(deck.get("width", 640))
+        height = int(deck.get("height", 480))
+        is_active = deck.get("deck_id") == active_deck_id
+        is_dealer = deck.get("deck_id") == dealer_id or str(deck.get("role", "")).lower() == "dealer"
+        color = (0, 0, 255) if is_dealer else ((0, 255, 255) if is_active else (255, 180, 0))
+        cv2.rectangle(frame, (x, y), (min(w - 1, x + width), min(h - 1, y + height)), color, 2)
+        cv2.putText(
+            frame,
+            f"{deck.get('name', 'Deck')} [{deck.get('deck_id')}]",
+            (max(0, x), max(20, y - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            color,
+            2,
+        )
 
     best_detections = limit_detections_per_class(detections)
 
@@ -485,7 +1041,7 @@ def annotate_frame(frame, detections, frame_width):
 
         conf = det['confidence']
         card_label = CARD_LABELS[det['class_id']]
-        color = (0, 255, 0) if det['x'] < middle_x else (0, 0, 255)
+        color = (0, 255, 0)
 
         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
         cv2.putText(
@@ -500,14 +1056,11 @@ def annotate_frame(frame, detections, frame_width):
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     # Remove strategy text from frame — UI shows recommendation
-    cv2.putText(frame, "PLAYER", (20, 30), font, 0.8, (0, 255, 0), 2)
-    # Keep dealer label at top-left of dealer area
-    # Dealer label moved only if needed by caller
-    cv2.putText(frame, "DEALER", (middle_x + 20, 30), font, 0.8, (0, 0, 255), 2)
+    cv2.putText(frame, "DECKS", (20, 30), font, 0.8, (0, 255, 0), 2)
 
     # Compute and display Hi-Lo count (true count normalized by decks)
     counts = compute_counts()
-    count_text = f"Count: {counts['true_count']:+.2f}  ({NUM_DECKS} deck)"
+    count_text = f"Count: {counts['true_count']:+.2f}  ({counts['decks']} deck)"
     cv2.putText(frame, count_text, (w - 380, h - 30), font, 0.8, (255, 255, 0), 2)
 
     return frame

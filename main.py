@@ -15,21 +15,49 @@ import postprocessing as post
 from commentary_engine import CommentaryEngine
 
 
+def _offset_detections(detections, offset_x: int, offset_y: int):
+    adjusted = []
+    for det in detections:
+        item = dict(det)
+        item["x"] = float(item.get("x", 0.0)) + offset_x
+        item["y"] = float(item.get("y", 0.0)) + offset_y
+        if "box" in item:
+            x1, y1, x2, y2 = item["box"]
+            item["box"] = (
+                float(x1) + offset_x,
+                float(y1) + offset_y,
+                float(x2) + offset_x,
+                float(y2) + offset_y,
+            )
+        adjusted.append(item)
+    return adjusted
+
+
 def main():
     print("[INIT] Starting Blackjack Card Detection (Hailo 10H)")
     if not HAILO_AVAILABLE:
         print_hailo_install_hint()
         return
 
+    deck_registry = post.deck_registry
+    deck_registry.refresh_from_disk()
+    post.reset_player_stats()
+    ready_errors = deck_registry.ready_errors()
+    if ready_errors:
+        print(f"[INIT] Setup incomplete: {', '.join(ready_errors)}")
+        print("[INIT] Starting camera stream anyway so ROIs can be defined in the web UI.")
+
     camera, camera_type = init_camera()
     detector = HailoCardDetector(config.MODEL_PATH)
-    # Initialize commentary engine; enable audio only if OPENAI_API_KEY present
-    commentary_enabled = bool(os.environ.get("OPENAI_API_KEY"))
-    engine = CommentaryEngine(output_dir="commentary_output", enable_audio=commentary_enabled)
-    # Configure commentary frequency (wenig|mittel|staendig)
-    frequency = getattr(config, "COMMENTARY_FREQUENCY", "mittel")
-    engine.set_frequency(frequency)
-    print(f"[COMMENTARY] Frequency={frequency}, cooldown={engine.cooldown_seconds:.1f}s")
+
+    engine = None
+    if os.environ.get("OPENAI_API_KEY"):
+        engine = CommentaryEngine(output_dir="commentary_output", enable_audio=False)
+        frequency = getattr(config, "COMMENTARY_FREQUENCY", "mittel")
+        engine.set_frequency(frequency)
+        print(f"[COMMENTARY] Frequency={frequency}, cooldown={engine.cooldown_seconds:.1f}s")
+    else:
+        print("[COMMENTARY] Disabled: OPENAI_API_KEY not set")
 
     print("[INIT] Ready. Press 'q' to quit.")
 
@@ -47,18 +75,43 @@ def main():
                     break
                 frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-            detections = detector.infer(frame)
-            post.update_card_tracking(detections, frame.shape[1])
+            deck_registry.refresh_from_disk()
+
+            all_detections = []
+            detections_by_deck = {}
+            dealer_state = deck_registry.dealer_state()
+            if dealer_state is not None:
+                dealer_roi = dealer_state.deck.clamp(frame.shape[1], frame.shape[0])
+                dealer_crop = frame[dealer_roi.y:dealer_roi.y + dealer_roi.height, dealer_roi.x:dealer_roi.x + dealer_roi.width]
+                dealer_detections = detector.infer(dealer_crop) if dealer_crop.size else []
+                dealer_detections = _offset_detections(dealer_detections, dealer_roi.x, dealer_roi.y)
+                detections_by_deck[dealer_state.deck.deck_id] = dealer_detections
+                all_detections.extend(dealer_detections)
+
+            for deck in deck_registry.decks:
+                if not deck.enabled or deck.is_dealer():
+                    continue
+                roi = deck.clamp(frame.shape[1], frame.shape[0])
+                crop = frame[roi.y:roi.y + roi.height, roi.x:roi.x + roi.width]
+                if crop.size == 0:
+                    continue
+                deck_detections = detector.infer(crop)
+                deck_detections = _offset_detections(deck_detections, roi.x, roi.y)
+                detections_by_deck[deck.deck_id] = deck_detections
+                all_detections.extend(deck_detections)
+
+            post.update_deck_tracking(detections_by_deck, frame.shape[1], frame.shape[0])
             post.update_text_files()
 
             # Build state and run commentary engine in background (non-blocking)
             try:
                 state = post.get_game_state_dict()
-                engine.process_state_non_blocking(state)
+                if engine is not None:
+                    engine.process_state_non_blocking(state)
             except Exception as e:
                 print(f"[COMMENTARY] Error: {e}")
 
-            annotated_frame = post.annotate_frame(frame.copy(), detections, frame.shape[1])
+            annotated_frame = post.annotate_frame(frame.copy(), all_detections, frame.shape[1])
             post.save_frame_and_info(annotated_frame)
 
             display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
@@ -70,7 +123,7 @@ def main():
                 fps = frame_count / elapsed
                 print(
                     f"[INFO] Frame {frame_count}, FPS: {fps:.2f}, "
-                    f"Player: {post.player_cards_persistent}, Dealer: {post.dealer_cards_persistent}"
+                    f"Active deck: {deck_registry.active_deck_id}, Cards: {deck_registry.get_active_state().cards if deck_registry.get_active_state() else []}, Dealer: {dealer_state.cards if dealer_state else []}"
                 )
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -99,7 +152,7 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Blackjack card detection with optional card counting decks")
-    parser.add_argument("--decks", type=int, default=1, help="Number of decks used for True Count calculation (default: 1)")
+    parser.add_argument("--decks", type=int, default=None, help="Number of decks used for True Count calculation")
     parser.add_argument(
         "--commentary-frequency",
         type=str,
@@ -108,10 +161,13 @@ if __name__ == "__main__":
         help="Commentary frequency: wenig, mittel, staendig (default: mittel)",
     )
     args = parser.parse_args()
-    try:
-        config.NUM_DECKS = int(args.decks)
-    except Exception:
-        config.NUM_DECKS = 1
+    if args.decks is not None:
+        try:
+            config.NUM_DECKS = post.save_deck_count(int(args.decks))
+        except Exception:
+            config.NUM_DECKS = post.load_deck_count()
+    else:
+        config.NUM_DECKS = post.load_deck_count()
     config.COMMENTARY_FREQUENCY = args.commentary_frequency
 
     main()

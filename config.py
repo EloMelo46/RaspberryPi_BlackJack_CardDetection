@@ -9,8 +9,13 @@ MAX_DETECTIONS_PER_CLASS = 1
 
 # Video capture settings
 FPS = 20
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 4056
+FRAME_HEIGHT = 3040
+
+# Browser stream output. Detection still uses the full camera frame above.
+WEB_STREAM_MAX_WIDTH = 1920
+WEB_STREAM_MAX_HEIGHT = 1080
+WEB_STREAM_JPEG_QUALITY = 82
 
 # Optional live calibration copied from working test pipeline.
 BOX_OFFSET_X = 0.0
