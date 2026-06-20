@@ -108,7 +108,7 @@ You'll see:
 - **Live camera feed** downscaled for the browser while detection still uses full-resolution ROI crops
 - **Player/dealer ROI overlays** on the full table image
 - **Active-player recommendation** for the selected player
-- **True Count** and count meaning, e.g. high/low cards expected
+- **Card Counting** and count meaning, e.g. high/low cards expected
 - **Wins / Pushes / Losses / Score** for the selected player
 - **Split and Double controls** for cases that need manual player decisions
 
