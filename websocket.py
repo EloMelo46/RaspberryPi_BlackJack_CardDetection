@@ -213,6 +213,7 @@ def index():
                     .crop-title {{ font-weight: 800; }}
                     .crop-image-wrap {{ aspect-ratio: 1 / 1; background: #05070c; border-radius: 10px; overflow: hidden; }}
                     #cropPreviewImg {{ width: 100%; height: 100%; object-fit: contain; display: block; }}
+                    #overlay, .deck-box, .deck-item, .crop-modal, .crop-panel, #cropPreviewImg {{ -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }}
                     html:fullscreen body {{ min-height: 100vh; background: var(--bg); }}
                     html:fullscreen .app {{ min-height: 100vh; box-sizing: border-box; }}
                     @media (max-width: 800px) {{
@@ -984,6 +985,9 @@ def index():
                             closeCropPreview();
                         }}
                     }});
+                    document.getElementById('cropModal').addEventListener('contextmenu', (evt) => evt.preventDefault());
+                    document.getElementById('overlay').addEventListener('contextmenu', (evt) => evt.preventDefault());
+                    document.getElementById('deckList').addEventListener('contextmenu', (evt) => evt.preventDefault());
 
                     document.addEventListener('keydown', (evt) => {{
                         if (evt.key === 'Escape') {{
