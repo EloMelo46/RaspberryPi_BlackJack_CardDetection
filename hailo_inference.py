@@ -186,22 +186,15 @@ class HailoCardDetector:
             for y, x in zip(ys, xs):
                 score = float(best_scores[y, x])
                 class_id = int(best_class_ids[y, x])
-                tx, ty, tw, th = box_map[y, x]
+                left, top, right, bottom = box_map[y, x]
 
-                sx = sigmoid(float(tx))
-                sy = sigmoid(float(ty))
-                sw = sigmoid(float(tw))
-                sh = sigmoid(float(th))
+                anchor_x = (x + 0.5) * stride
+                anchor_y = (y + 0.5) * stride
 
-                cx = (x + (2.0 * sx - 0.5)) * stride
-                cy = (y + (2.0 * sy - 0.5)) * stride
-                bw = ((2.0 * sw) ** 2) * stride
-                bh = ((2.0 * sh) ** 2) * stride
-
-                x1 = (cx - bw / 2.0 - pad_x) / lb_scale
-                y1 = (cy - bh / 2.0 - pad_y) / lb_scale
-                x2 = (cx + bw / 2.0 - pad_x) / lb_scale
-                y2 = (cy + bh / 2.0 - pad_y) / lb_scale
+                x1 = (anchor_x - float(left) * stride - pad_x) / lb_scale
+                y1 = (anchor_y - float(top) * stride - pad_y) / lb_scale
+                x2 = (anchor_x + float(right) * stride - pad_x) / lb_scale
+                y2 = (anchor_y + float(bottom) * stride - pad_y) / lb_scale
 
                 x1 = max(0.0, min(float(img_w - 1), x1))
                 y1 = max(0.0, min(float(img_h - 1), y1))
