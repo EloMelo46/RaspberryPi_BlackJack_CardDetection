@@ -1,4 +1,5 @@
-from flask import Flask, send_file, jsonify, request
+from flask import Flask, Response, send_file, jsonify, request
+import cv2
 import json
 import os
 import re
@@ -205,6 +206,13 @@ def index():
                     .row > * {{ flex: 1; }}
                     .error {{ color: var(--danger); font-weight: 700; margin-bottom: 10px; }}
                     .dealer-box {{ border-color: var(--danger) !important; background: rgba(251,113,133,0.12) !important; }}
+                    .crop-modal {{ position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(3,7,18,0.78); backdrop-filter: blur(8px); }}
+                    .crop-modal.open {{ display: flex; }}
+                    .crop-panel {{ width: min(92vw, 760px); background: rgba(18,22,35,0.98); border: 1px solid rgba(255,255,255,.10); border-radius: 14px; padding: 12px; box-shadow: 0 28px 90px rgba(0,0,0,.48); }}
+                    .crop-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
+                    .crop-title {{ font-weight: 800; }}
+                    .crop-image-wrap {{ aspect-ratio: 1 / 1; background: #05070c; border-radius: 10px; overflow: hidden; }}
+                    #cropPreviewImg {{ width: 100%; height: 100%; object-fit: contain; display: block; }}
                     html:fullscreen body {{ min-height: 100vh; background: var(--bg); }}
                     html:fullscreen .app {{ min-height: 100vh; box-sizing: border-box; }}
                     @media (max-width: 800px) {{
@@ -241,6 +249,9 @@ def index():
                         .split-hands {{ margin-top: 6px; }}
                         .deck-list {{ max-height: 116px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }}
                         .deck-item {{ padding: 8px; }}
+                        .crop-modal {{ padding: 8px; align-items: start; }}
+                        .crop-panel {{ width: 100%; margin-top: 8px; padding: 8px; border-radius: 12px; }}
+                        .crop-head {{ margin-bottom: 8px; }}
                     }}
                 </style>
             </head>
@@ -311,6 +322,21 @@ def index():
                     </div>
                 </div>
 
+                <div id="cropModal" class="crop-modal">
+                    <div class="crop-panel">
+                        <div class="crop-head">
+                            <div>
+                                <div id="cropPreviewTitle" class="crop-title">ROI Preview</div>
+                                <div class="small">Detection view · 640x640</div>
+                            </div>
+                            <button onclick="closeCropPreview()">Close</button>
+                        </div>
+                        <div class="crop-image-wrap">
+                            <img id="cropPreviewImg" alt="Selected ROI crop">
+                        </div>
+                    </div>
+                </div>
+
                 <script>
                     const SOURCE_WIDTH = {config.FRAME_WIDTH};
                     const SOURCE_HEIGHT = {config.FRAME_HEIGHT};
@@ -326,6 +352,9 @@ def index():
                     let isDragging = false;
                     let isSavingRoi = false;
                     let suppressNextDeckClick = false;
+                    let cropPreviewDeckId = null;
+                    let cropPreviewTimer = null;
+                    let longPressPreviewOpened = false;
 
                     function clamp(value, min, max) {{
                         return Math.max(min, Math.min(max, value));
@@ -383,6 +412,106 @@ def index():
                         }}, 350);
                     }}
 
+                    function isMobileView() {{
+                        return window.matchMedia('(max-width: 800px)').matches;
+                    }}
+
+                    function deckDisplayName(deck) {{
+                        if (!deck) return 'ROI Preview';
+                        return deck.role === 'dealer' ? 'Dealer' : deck.name;
+                    }}
+
+                    function openCropPreview(deckId) {{
+                        const deck = decks.find(d => d.deck_id === deckId);
+                        cropPreviewDeckId = deckId;
+                        document.getElementById('cropPreviewTitle').innerText = deckDisplayName(deck);
+                        document.getElementById('cropModal').classList.add('open');
+                        loadCropPreviewFrame();
+                    }}
+
+                    function closeCropPreview() {{
+                        cropPreviewDeckId = null;
+                        if (cropPreviewTimer) {{
+                            window.clearTimeout(cropPreviewTimer);
+                            cropPreviewTimer = null;
+                        }}
+                        document.getElementById('cropModal').classList.remove('open');
+                        document.getElementById('cropPreviewImg').removeAttribute('src');
+                    }}
+
+                    function loadCropPreviewFrame() {{
+                        if (!cropPreviewDeckId) return;
+                        const next = new Image();
+                        next.onload = () => {{
+                            if (!cropPreviewDeckId) return;
+                            document.getElementById('cropPreviewImg').src = next.src;
+                            cropPreviewTimer = window.setTimeout(loadCropPreviewFrame, 160);
+                        }};
+                        next.onerror = () => {{
+                            cropPreviewTimer = window.setTimeout(loadCropPreviewFrame, 500);
+                        }};
+                        next.src = `/deck-crop/${{encodeURIComponent(cropPreviewDeckId)}}?ts=${{Date.now()}}`;
+                    }}
+
+                    function openCropPreviewOnDesktop(evt, deckId) {{
+                        if (isMobileView()) return;
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        openCropPreview(deckId);
+                    }}
+
+                    function beginCropLongPress(evt, deckId) {{
+                        if (!isMobileView()) return null;
+                        const state = {{
+                            startX: evt.clientX,
+                            startY: evt.clientY,
+                            timer: null,
+                            opened: false,
+                        }};
+                        state.timer = window.setTimeout(() => {{
+                            state.opened = true;
+                            longPressPreviewOpened = true;
+                            suppressDeckClickBriefly();
+                            openCropPreview(deckId);
+                        }}, 650);
+                        return state;
+                    }}
+
+                    function cancelCropLongPress(state) {{
+                        if (state && state.timer) {{
+                            window.clearTimeout(state.timer);
+                            state.timer = null;
+                        }}
+                    }}
+
+                    function updateCropLongPress(state, evt) {{
+                        if (!state) return;
+                        if (Math.abs(evt.clientX - state.startX) > 8 || Math.abs(evt.clientY - state.startY) > 8) {{
+                            cancelCropLongPress(state);
+                        }}
+                    }}
+
+                    function attachListPreviewTriggers(element, deckId) {{
+                        element.addEventListener('dblclick', (evt) => openCropPreviewOnDesktop(evt, deckId));
+                        element.addEventListener('pointerdown', (evt) => {{
+                            const state = beginCropLongPress(evt, deckId);
+                            if (!state) return;
+                            const onMove = (moveEvt) => updateCropLongPress(state, moveEvt);
+                            const onUp = () => {{
+                                cancelCropLongPress(state);
+                                if (state.opened) {{
+                                    longPressPreviewOpened = false;
+                                }}
+                                document.removeEventListener('pointermove', onMove);
+                                document.removeEventListener('pointerup', onUp);
+                                document.removeEventListener('pointercancel', onUp);
+                            }};
+                            document.addEventListener('pointermove', onMove);
+                            document.addEventListener('pointerup', onUp);
+                            document.addEventListener('pointercancel', onUp);
+                        }});
+                    }}
+
                     async function reloadDecks(force = false) {{
                         if (!force && (isDragging || isSavingRoi)) return;
                         const resp = await fetch('/decks');
@@ -436,6 +565,7 @@ def index():
                             box.appendChild(handle);
 
                             box.addEventListener('pointerdown', onDeckPointerDown);
+                            box.addEventListener('dblclick', (evt) => openCropPreviewOnDesktop(evt, deck.deck_id));
                             box.addEventListener('click', async (evt) => {{
                                 evt.stopPropagation();
                                 if (suppressNextDeckClick) {{
@@ -456,8 +586,13 @@ def index():
                             const rec = deck.last_recommendation || '';
                             const points = deck.points || '-';
                             item.innerHTML = `<div><div class="deck-name">${{deck.role === 'dealer' ? 'Dealer' : deck.name}}</div><div class="small">${{cards}}</div><div class="small">${{rec}}</div></div><div class="small value">${{points}} pts</div>`;
+                            attachListPreviewTriggers(item, deck.deck_id);
                             if (deck.role !== 'dealer') {{
                                 item.addEventListener('click', async () => {{
+                                    if (suppressNextDeckClick) {{
+                                        suppressNextDeckClick = false;
+                                        return;
+                                    }}
                                     await setActiveDeck(deck.deck_id);
                                 }});
                             }}
@@ -569,6 +704,7 @@ def index():
                         const {{ rect, scaleX, scaleY }} = getOverlayMetrics();
                         isDragging = true;
                         evt.currentTarget.setPointerCapture(evt.pointerId);
+                        const cropLongPress = beginCropLongPress(evt, deckId);
                         dragState = {{
                             deckId,
                             pointerId: evt.pointerId,
@@ -585,6 +721,7 @@ def index():
                             if (Math.abs(moveEvt.clientX - dragState.startX) > 3 || Math.abs(moveEvt.clientY - dragState.startY) > 3) {{
                                 dragState.moved = true;
                             }}
+                            updateCropLongPress(cropLongPress, moveEvt);
                             if (!dragState.moved) return;
                             const x = clamp(Math.round((moveEvt.clientX - rect.left - dragState.offsetX) / scaleX), 0, SOURCE_WIDTH - deck.width);
                             const y = clamp(Math.round((moveEvt.clientY - rect.top - dragState.offsetY) / scaleY), 0, SOURCE_HEIGHT - deck.height);
@@ -600,9 +737,15 @@ def index():
                             document.removeEventListener('pointermove', onMove);
                             document.removeEventListener('pointerup', onUp);
                             document.removeEventListener('pointercancel', onUp);
+                            cancelCropLongPress(cropLongPress);
                             if (!dragState) return;
                             const wasMoved = dragState.moved;
                             dragState = null;
+                            if (longPressPreviewOpened) {{
+                                longPressPreviewOpened = false;
+                                isDragging = false;
+                                return;
+                            }}
                             if (!wasMoved) {{
                                 isDragging = false;
                                 await setActiveDeck(deckId);
@@ -836,6 +979,18 @@ def index():
                         renderDecks();
                     }});
 
+                    document.getElementById('cropModal').addEventListener('click', (evt) => {{
+                        if (evt.target.id === 'cropModal') {{
+                            closeCropPreview();
+                        }}
+                    }});
+
+                    document.addEventListener('keydown', (evt) => {{
+                        if (evt.key === 'Escape') {{
+                            closeCropPreview();
+                        }}
+                    }});
+
                     document.getElementById('frameWrap').addEventListener('click', async (evt) => {{
                         if (!addMode) return;
                         await createDeckAt(evt.clientX, evt.clientY);
@@ -880,6 +1035,42 @@ def image():
     if os.path.exists(IMAGE_PATH):
         return send_file(IMAGE_PATH, mimetype='image/jpeg')
     return "No image", 404
+
+
+@app.route("/deck-crop/<deck_id>")
+def deck_crop(deck_id):
+    """Serve the selected ROI crop resized to the model input view."""
+    deck_registry.refresh_from_disk()
+    deck = find_deck(deck_registry.decks, deck_id)
+    if deck is None:
+        return "Deck not found", 404
+
+    if not os.path.exists(IMAGE_PATH):
+        return "No image", 404
+
+    frame = cv2.imread(IMAGE_PATH)
+    if frame is None:
+        return "No image", 404
+
+    roi = deck.clamp(frame.shape[1], frame.shape[0])
+    crop = frame[roi.y:roi.y + roi.height, roi.x:roi.x + roi.width]
+    if crop.size == 0:
+        return "Empty crop", 404
+
+    model_view = cv2.resize(
+        crop,
+        (DEFAULT_DECK_WIDTH, DEFAULT_DECK_HEIGHT),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    ok, encoded = cv2.imencode(".jpg", model_view, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    if not ok:
+        return "Could not encode crop", 500
+
+    return Response(
+        encoded.tobytes(),
+        mimetype="image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.route("/decks", methods=["GET", "POST"])

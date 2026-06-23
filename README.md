@@ -100,6 +100,7 @@ The web dashboard is the table setup and gameplay controller:
 - Add or replace a dealer ROI with **Add dealer**.
 - Drag the square ROI boxes on top of the full camera image and pull the corner handle to resize them from 400-1000 px.
 - Click a player box or player row to select the active player.
+- Open a magnified ROI preview with **double-click** on desktop or **press-and-hold** on mobile.
 - Set the number of decks in the shoe with **Set decks** so True Count is correct.
 - Use **Fullscreen** on desktop/mobile for a cleaner play view.
 - ROI layouts are stored in `outputs/decks.json`; runtime state is stored separately.
