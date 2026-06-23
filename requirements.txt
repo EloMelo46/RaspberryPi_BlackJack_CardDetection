@@ -12,6 +12,9 @@ MarkupSafe==3.0.3
 openai>=1.0.0
 python-dotenv>=1.0.0
 
+# Tests
+pytest>=8.0.0
+
 # Raspberry Pi & Camera Support
 picamera2==0.3.31
 

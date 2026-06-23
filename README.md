@@ -3,7 +3,7 @@
 A real-time Blackjack assistant for Raspberry Pi using the **Hailo 10H AI Accelerator**. The system captures the full 12MP camera image, lets you define smaller player/dealer ROIs in a web UI, runs card detection inside those ROIs, and provides Blackjack recommendations, card counting, and per-player scoring.
 
 ## Features
-- **Full-frame Capture, ROI Detection**: Uses the full 4056x3040 camera frame as the source image while detecting cards in smaller 640x480 player/dealer ROIs.
+- **Full-frame Capture, ROI Detection**: Uses the full 4056x3040 camera frame as the source image while detecting cards in adjustable square player/dealer ROIs.
 - **Multi-player Table Setup**: Define named player boxes and a dealer box directly in the browser; drag boxes on top of the live video.
 - **Strategy Engine**: Automatic recommendation for the active player using detected player cards and dealer cards.
 - **Card Counting**: Global Hi-Lo True Count across all visible player/dealer ROIs, with configurable shoe deck count.
@@ -98,7 +98,7 @@ http://<raspberry-pi-ip>:5000
 The web dashboard is the table setup and gameplay controller:
 - Enter the number of players and player names, then click **Create player boxes**.
 - Add or replace a dealer ROI with **Add dealer**.
-- Drag the 640x480 ROI boxes on top of the full camera image.
+- Drag the square ROI boxes on top of the full camera image and pull the corner handle to resize them from 400-1000 px.
 - Click a player box or player row to select the active player.
 - Set the number of decks in the shoe with **Set decks** so True Count is correct.
 - Use **Fullscreen** on desktop/mobile for a cleaner play view.
@@ -142,7 +142,7 @@ RaspberryPi_BlackJack_CardDetection/
 ### 2. Hailo Inference
 - Loads `yolo26m.hef` model into VDevice
 - Runs YOLOv26 object detection on each configured ROI, not the whole 12MP frame
-- Each ROI defaults to 640x480 but is cropped from the full-resolution source frame
+- Each ROI defaults to 640x640, can be resized from 400-1000 px, and is cropped from the full-resolution source frame
 - Outputs: bounding boxes, class IDs, confidence scores
 
 ### 3. ROI and Card Tracking

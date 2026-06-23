@@ -12,6 +12,8 @@ from deck_config import (
     save_decks,
     DEFAULT_DECK_WIDTH,
     DEFAULT_DECK_HEIGHT,
+    MIN_DECK_SIZE,
+    MAX_DECK_SIZE,
 )
 from deck_manager import registry as deck_registry
 import config
@@ -162,6 +164,7 @@ def index():
                     .deck-box {{ position: absolute; border: 2px solid var(--accent-2); border-radius: 12px; background: rgba(245,158,11,0.10); box-sizing: border-box; cursor: move; user-select: none; touch-action: none; }}
                     .deck-box.active {{ border-color: var(--good); border-width: 4px; background: rgba(34,197,94,0.16); box-shadow: 0 0 0 3px rgba(34,197,94,0.24), 0 0 28px rgba(34,197,94,0.35); }}
                     .deck-label {{ position: absolute; left: 8px; top: -12px; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); padding: 3px 8px; border-radius: 999px; font-size: 12px; }}
+                    .resize-handle {{ position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; border-radius: 4px; background: rgba(238,242,255,0.72); border: 1px solid var(--panel); box-shadow: 0 1px 6px rgba(0,0,0,.28); cursor: nwse-resize; touch-action: none; }}
                     .sidebar {{ display: grid; gap: 12px; }}
                     .card {{ background: rgba(18,22,35,.9); border: 1px solid rgba(255,255,255,.07); border-radius: 16px; padding: 14px; }}
                     .deck-list {{ display: grid; gap: 8px; margin-top: 10px; }}
@@ -226,6 +229,7 @@ def index():
                         .deck-box {{ border-width: 1px; border-radius: 6px; }}
                         .deck-box.active {{ border-width: 2px; box-shadow: 0 0 0 1px rgba(34,197,94,0.22), 0 0 14px rgba(34,197,94,0.24); }}
                         .deck-label {{ left: 3px; top: -11px; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 4px; font-size: 8px; line-height: 1; }}
+                        .resize-handle {{ right: -4px; bottom: -4px; width: 10px; height: 10px; border-radius: 3px; }}
                         .stat {{ padding: 7px; }}
                         .stat .label {{ font-size: 11px; }}
                         .stat .num {{ font-size: 17px; }}
@@ -258,7 +262,7 @@ def index():
                             </div>
                         </div>
                         <div id="errorBanner" class="error" style="display:none;"></div>
-                        <div class="hint">Drag 640x480 boxes inside the full video. Click a player box to show its recommendation. Dealer must be defined too.</div>
+                        <div class="hint">Drag square boxes inside the full video. Pull the corner to resize from 400-1000 px. Click a player box to show its recommendation.</div>
                         <div class="frame-wrap" id="frameWrap">
                             <img id="frame" src="/image">
                             <div id="overlay"></div>
@@ -312,12 +316,16 @@ def index():
                     const SOURCE_HEIGHT = {config.FRAME_HEIGHT};
                     const DEFAULT_DECK_WIDTH = {DEFAULT_DECK_WIDTH};
                     const DEFAULT_DECK_HEIGHT = {DEFAULT_DECK_HEIGHT};
+                    const MIN_DECK_SIZE = {MIN_DECK_SIZE};
+                    const MAX_DECK_SIZE = {MAX_DECK_SIZE};
 
                     let decks = [];
                     let activeDeckId = null;
                     let addMode = false;
                     let dragState = null;
                     let isDragging = false;
+                    let isSavingRoi = false;
+                    let suppressNextDeckClick = false;
 
                     function clamp(value, min, max) {{
                         return Math.max(min, Math.min(max, value));
@@ -347,13 +355,42 @@ def index():
                         }};
                     }}
 
-                    async function reloadDecks() {{
-                        if (isDragging) return;
+                    function clampDeckSize(deck, size) {{
+                        const maxByFrame = Math.max(1, Math.min(MAX_DECK_SIZE, SOURCE_WIDTH - deck.x, SOURCE_HEIGHT - deck.y));
+                        const minByFrame = Math.min(MIN_DECK_SIZE, maxByFrame);
+                        return clamp(Math.round(size), minByFrame, maxByFrame);
+                    }}
+
+                    function clampDeckSizeForFrame(size) {{
+                        const maxByFrame = Math.max(1, Math.min(MAX_DECK_SIZE, SOURCE_WIDTH, SOURCE_HEIGHT));
+                        const minByFrame = Math.min(MIN_DECK_SIZE, maxByFrame);
+                        return clamp(Math.round(size), minByFrame, maxByFrame);
+                    }}
+
+                    function makeSquare(deck) {{
+                        const size = clampDeckSizeForFrame(Math.max(deck.width || DEFAULT_DECK_WIDTH, deck.height || DEFAULT_DECK_HEIGHT));
+                        deck.width = size;
+                        deck.height = size;
+                        deck.x = clamp(Math.round(deck.x || 0), 0, SOURCE_WIDTH - size);
+                        deck.y = clamp(Math.round(deck.y || 0), 0, SOURCE_HEIGHT - size);
+                        return deck;
+                    }}
+
+                    function suppressDeckClickBriefly() {{
+                        suppressNextDeckClick = true;
+                        window.setTimeout(() => {{
+                            suppressNextDeckClick = false;
+                        }}, 350);
+                    }}
+
+                    async function reloadDecks(force = false) {{
+                        if (!force && (isDragging || isSavingRoi)) return;
                         const resp = await fetch('/decks');
                         if (!resp.ok) return;
                         const data = await resp.json();
                         if (!Array.isArray(data.decks)) return;
                         decks = data.decks || [];
+                        decks.forEach(makeSquare);
                         activeDeckId = data.active_deck_id || null;
                         renderDecks();
                         updateErrorBanner(data.ready_errors || []);
@@ -392,9 +429,20 @@ def index():
                             label.innerText = overlayLabel(deck);
                             box.appendChild(label);
 
+                            const handle = document.createElement('div');
+                            handle.className = 'resize-handle';
+                            handle.title = 'Resize square ROI';
+                            handle.addEventListener('pointerdown', onDeckResizePointerDown);
+                            box.appendChild(handle);
+
                             box.addEventListener('pointerdown', onDeckPointerDown);
                             box.addEventListener('click', async (evt) => {{
                                 evt.stopPropagation();
+                                if (suppressNextDeckClick) {{
+                                    evt.preventDefault();
+                                    suppressNextDeckClick = false;
+                                    return;
+                                }}
                                 await setActiveDeck(deck.deck_id);
                             }});
 
@@ -454,6 +502,7 @@ def index():
                         activeDeckId = data.active_deck_id || deckId;
                         if (Array.isArray(data.decks)) {{
                             decks = data.decks;
+                            decks.forEach(makeSquare);
                         }}
                         renderDecks();
                         document.getElementById('deckList').scrollTop = 0;
@@ -478,7 +527,7 @@ def index():
                     function startAddDeck() {{
                         addMode = true;
                         window.__addRole = 'deck';
-                        alert('Click inside the video to place a new 640x480 player box.');
+                        alert('Click inside the video to place a new square player box.');
                     }}
 
                     function startAddDealer() {{
@@ -554,17 +603,75 @@ def index():
                             if (!dragState) return;
                             const wasMoved = dragState.moved;
                             dragState = null;
-                            isDragging = false;
                             if (!wasMoved) {{
+                                isDragging = false;
                                 await setActiveDeck(deckId);
                                 return;
                             }}
-                            await fetch(`/decks/${{deckId}}`, {{
-                                method: 'PUT',
-                                headers: {{ 'Content-Type': 'application/json' }},
-                                body: JSON.stringify(deck)
-                            }});
-                            await reloadDecks();
+                            suppressDeckClickBriefly();
+                            isSavingRoi = true;
+                            try {{
+                                await fetch(`/decks/${{deckId}}`, {{
+                                    method: 'PUT',
+                                    headers: {{ 'Content-Type': 'application/json' }},
+                                    body: JSON.stringify(deck)
+                                }});
+                                await reloadDecks(true);
+                            }} finally {{
+                                isSavingRoi = false;
+                                isDragging = false;
+                            }}
+                        }};
+
+                        document.addEventListener('pointermove', onMove);
+                        document.addEventListener('pointerup', onUp);
+                        document.addEventListener('pointercancel', onUp);
+                    }}
+
+                    async function onDeckResizePointerDown(evt) {{
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        const box = evt.currentTarget.parentElement;
+                        const deckId = box.dataset.deckId;
+                        const deck = decks.find(d => d.deck_id === deckId);
+                        if (!deck) return;
+
+                        const {{ rect, scaleX, scaleY }} = getOverlayMetrics();
+                        isDragging = true;
+                        evt.currentTarget.setPointerCapture(evt.pointerId);
+
+                        const onMove = (moveEvt) => {{
+                            moveEvt.preventDefault();
+                            const sourceX = Math.round((moveEvt.clientX - rect.left) / scaleX);
+                            const sourceY = Math.round((moveEvt.clientY - rect.top) / scaleY);
+                            const requested = Math.max(sourceX - deck.x, sourceY - deck.y);
+                            const size = clampDeckSize(deck, requested);
+                            deck.width = size;
+                            deck.height = size;
+                            const pos = toScreen(deck);
+                            box.style.width = pos.width + 'px';
+                            box.style.height = pos.height + 'px';
+                        }};
+
+                        const onUp = async (upEvt) => {{
+                            if (upEvt) upEvt.preventDefault();
+                            document.removeEventListener('pointermove', onMove);
+                            document.removeEventListener('pointerup', onUp);
+                            document.removeEventListener('pointercancel', onUp);
+                            suppressDeckClickBriefly();
+                            makeSquare(deck);
+                            isSavingRoi = true;
+                            try {{
+                                await fetch(`/decks/${{deckId}}`, {{
+                                    method: 'PUT',
+                                    headers: {{ 'Content-Type': 'application/json' }},
+                                    body: JSON.stringify(deck)
+                                }});
+                                await reloadDecks(true);
+                            }} finally {{
+                                isSavingRoi = false;
+                                isDragging = false;
+                            }}
                         }};
 
                         document.addEventListener('pointermove', onMove);

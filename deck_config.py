@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_DECK_WIDTH = 640
-DEFAULT_DECK_HEIGHT = 480
+DEFAULT_DECK_SIZE = 640
+MIN_DECK_SIZE = 400
+MAX_DECK_SIZE = 1000
+DEFAULT_DECK_WIDTH = DEFAULT_DECK_SIZE
+DEFAULT_DECK_HEIGHT = DEFAULT_DECK_SIZE
 DECK_CONFIG_PATH = Path("outputs") / "decks.json"
 DECK_CONFIG_BACKUP_PATH = Path("outputs") / "decks.bak.json"
 DECK_STATE_PATH = Path("outputs") / "deck_state.json"
@@ -26,18 +29,20 @@ class DeckROI:
     role: str = "deck"
 
     def clamp(self, frame_width: int, frame_height: int) -> "DeckROI":
-        x = max(0, min(int(self.x), max(0, frame_width - 1)))
-        y = max(0, min(int(self.y), max(0, frame_height - 1)))
-        width = max(1, min(int(self.width), frame_width - x))
-        height = max(1, min(int(self.height), frame_height - y))
+        frame_max_size = max(1, min(MAX_DECK_SIZE, frame_width, frame_height))
+        min_size = min(MIN_DECK_SIZE, frame_max_size)
+        requested_size = max(int(self.width), int(self.height), min_size)
+        size = max(min_size, min(requested_size, frame_max_size))
+        x = max(0, min(int(self.x), max(0, frame_width - size)))
+        y = max(0, min(int(self.y), max(0, frame_height - size)))
         return DeckROI(
             deck_id=self.deck_id,
             name=self.name,
             role=self.role,
             x=x,
             y=y,
-            width=width,
-            height=height,
+            width=size,
+            height=size,
             enabled=bool(self.enabled),
         )
 

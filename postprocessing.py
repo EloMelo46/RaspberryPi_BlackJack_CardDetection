@@ -1012,7 +1012,7 @@ def annotate_frame(frame, detections, frame_width):
         x = int(deck.get("x", 0))
         y = int(deck.get("y", 0))
         width = int(deck.get("width", 640))
-        height = int(deck.get("height", 480))
+        height = int(deck.get("height", 640))
         is_active = deck.get("deck_id") == active_deck_id
         is_dealer = deck.get("deck_id") == dealer_id or str(deck.get("role", "")).lower() == "dealer"
         color = (0, 0, 255) if is_dealer else ((0, 255, 255) if is_active else (255, 180, 0))
