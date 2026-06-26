@@ -59,7 +59,7 @@ def main():
     else:
         print("[COMMENTARY] Disabled: OPENAI_API_KEY not set")
 
-    print("[INIT] Ready. Press 'q' to quit.")
+    print("[INIT] Ready. Camera preview is served through the app window.")
 
     frame_count = 0
     start_time = time.time()
@@ -114,9 +114,6 @@ def main():
             annotated_frame = post.annotate_frame(frame.copy(), all_detections, frame.shape[1])
             post.save_frame_and_info(annotated_frame)
 
-            display_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
-            cv2.imshow("Blackjack Card Detection", display_frame)
-
             frame_count += 1
             if frame_count % 30 == 0:
                 elapsed = time.time() - start_time
@@ -125,10 +122,6 @@ def main():
                     f"[INFO] Frame {frame_count}, FPS: {fps:.2f}, "
                     f"Active deck: {deck_registry.active_deck_id}, Cards: {deck_registry.get_active_state().cards if deck_registry.get_active_state() else []}, Dealer: {dealer_state.cards if dealer_state else []}"
                 )
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("[EXIT] Quitting...")
-                break
 
     except KeyboardInterrupt:
         print("\n[EXIT] Interrupted by user")
@@ -146,7 +139,6 @@ def main():
             camera.release()
 
         detector.close()
-        cv2.destroyAllWindows()
         print("[CLEANUP] Done")
 
 

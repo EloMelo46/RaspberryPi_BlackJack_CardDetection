@@ -8,6 +8,14 @@ itsdangerous==2.2.0
 click==8.3.1
 MarkupSafe==3.0.3
 
+# Desktop App Window
+# Linux/Raspberry Pi also needs a WebView backend, for example:
+# sudo apt install python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
+pywebview==6.2.1
+bottle==0.13.4
+proxy-tools==0.1.0
+typing_extensions==4.15.0
+
 # OpenAI API (for LLM commentary and TTS)
 openai>=1.0.0
 python-dotenv>=1.0.0

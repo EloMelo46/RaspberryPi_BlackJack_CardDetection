@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=BlackJack Card Detection
+Exec=/home/elomelo/RaspberryPi_BlackJack_CardDetection/scripts/start.sh
+Icon=/home/elomelo/RaspberryPi_BlackJack_CardDetection/assets/icon.png
+Terminal=true
+Categories=Utility;
+X-KeepTerminal=true

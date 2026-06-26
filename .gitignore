@@ -6,8 +6,6 @@ hailo-rpi5-examples/
 outputs/
 commentary_output/
 hailort.log
-tests/
-
 # Environment variables
 .env
 .env.local

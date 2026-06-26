@@ -181,7 +181,7 @@ class GameSession:
 
         # During player phase, evaluate whether player should stand.
         # This runs even without new cards so the state can progress on stable frames.
-        if self.phase == "player":
+        if self.phase == "player" and active.status == "active":
             # if basic strategy is available and dealer upcard is known, decide
             try:
                 dealer_cards = self.get_dealer_cards()
@@ -203,7 +203,7 @@ class GameSession:
                 pass
 
         # If all player hands are finished, and dealer has enough cards, move to dealer
-        if all(h.status in ["stand", "bust", "blackjack", "finished"] for h in self.player_hands):
+        if self.phase == "player" and all(h.status in ["stand", "bust", "blackjack", "finished"] for h in self.player_hands):
             # if dealer already has 2+ cards, start dealer
             if self.dealer_hand and len(self.dealer_hand.cards) >= 2:
                 self.start_dealer_turn()
