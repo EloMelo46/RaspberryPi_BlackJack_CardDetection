@@ -6,6 +6,7 @@ CONFIDENCE_THRESHOLD = 0.55
 NMS_IOU_THRESHOLD = 0.45
 DECAY_LIMIT = 50  # Frames until card is deleted if not seen
 MAX_DETECTIONS_PER_CLASS = 1
+PLAYER_BUST_CONFIRM_MS = 100  # Same bust hand must be detected continuously
 
 # Video capture settings
 FPS = 20
@@ -42,4 +43,5 @@ CARD_LABELS = [
 NUM_DECKS = 1
 
 # Commentary frequency (can be overridden by CLI): wenig | mittel | staendig
+COMMENTARY_ENABLED = False
 COMMENTARY_FREQUENCY = "mittel"

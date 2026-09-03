@@ -15,6 +15,13 @@ import postprocessing as post
 from commentary_engine import CommentaryEngine
 
 
+def _environment_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _offset_detections(detections, offset_x: int, offset_y: int):
     adjusted = []
     for det in detections:
@@ -51,8 +58,11 @@ def main():
     detector = HailoCardDetector(config.MODEL_PATH)
 
     engine = None
-    if os.environ.get("OPENAI_API_KEY"):
-        engine = CommentaryEngine(output_dir="commentary_output", enable_audio=False)
+    commentary_enabled = bool(getattr(config, "COMMENTARY_ENABLED", False))
+    if not commentary_enabled:
+        print("[COMMENTARY] Disabled: explicit opt-in not enabled")
+    elif os.environ.get("OPENAI_API_KEY"):
+        engine = CommentaryEngine(output_dir="commentary_output", enable_audio=False, enabled=True)
         frequency = getattr(config, "COMMENTARY_FREQUENCY", "mittel")
         engine.set_frequency(frequency)
         print(f"[COMMENTARY] Frequency={frequency}, cooldown={engine.cooldown_seconds:.1f}s")
@@ -152,6 +162,11 @@ if __name__ == "__main__":
         choices=["wenig", "mittel", "staendig"],
         help="Commentary frequency: wenig, mittel, staendig (default: mittel)",
     )
+    parser.add_argument(
+        "--enable-commentary",
+        action="store_true",
+        help="Explicitly enable OpenAI commentary API calls",
+    )
     args = parser.parse_args()
     if args.decks is not None:
         try:
@@ -160,6 +175,10 @@ if __name__ == "__main__":
             config.NUM_DECKS = post.load_deck_count()
     else:
         config.NUM_DECKS = post.load_deck_count()
+    config.COMMENTARY_ENABLED = bool(
+        args.enable_commentary
+        or _environment_flag("COMMENTARY_ENABLED", getattr(config, "COMMENTARY_ENABLED", False))
+    )
     config.COMMENTARY_FREQUENCY = args.commentary_frequency
 
     main()

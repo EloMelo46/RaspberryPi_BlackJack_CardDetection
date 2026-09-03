@@ -36,6 +36,7 @@ player_stats = {}
 round_locked = False
 no_detection_frames = 0
 EMPTY_ROUND_RESET_FRAMES = 5
+player_bust_candidates = {}
 
 
 def _read_reset_request_id() -> str:
@@ -130,21 +131,23 @@ def save_player_stats() -> None:
 
 
 def reset_player_stats() -> None:
-    global player_stats, round_locked, no_detection_frames
+    global player_stats, round_locked, no_detection_frames, player_bust_candidates
     player_stats = {}
     round_locked = False
     no_detection_frames = 0
+    player_bust_candidates = {}
     save_player_stats()
 
 
 def reset_all_stats(lock_current_round: bool = False) -> None:
     """Clear every accumulated score while keeping ROI and shoe settings."""
     global game_stats, last_published_outcome
-    global player_stats, round_locked, no_detection_frames
+    global player_stats, round_locked, no_detection_frames, player_bust_candidates
 
     player_stats = {}
     round_locked = bool(lock_current_round)
     no_detection_frames = 0
+    player_bust_candidates = {}
     last_published_outcome = None
     game_stats = {
         "player_wins": 0,
@@ -188,8 +191,9 @@ def _apply_pending_reset_request() -> None:
 
 
 def _reset_round_state() -> None:
-    global round_locked
+    global round_locked, player_bust_candidates
     round_locked = False
+    player_bust_candidates = {}
     _refresh_player_stats()
     changed = False
     for stats in player_stats.values():
@@ -457,9 +461,29 @@ def _is_blackjack(cards: list[str]) -> bool:
     return len(cards) == 2 and best_hand_value(cards) == 21
 
 
-def _publish_round_if_dealer_terminal() -> None:
+def _player_bust_is_confirmed(deck_id: str, detected_cards: list[str], now: float | None = None) -> bool:
+    """Return true only after the same raw bust hand stayed visible long enough."""
+    global player_bust_candidates
+
+    now = time.monotonic() if now is None else float(now)
+    signature = tuple(sorted(set(detected_cards)))
+    if not signature or best_hand_value(list(signature)) <= 21:
+        player_bust_candidates.pop(deck_id, None)
+        return False
+
+    candidate = player_bust_candidates.get(deck_id)
+    if not candidate or candidate.get("cards") != signature:
+        player_bust_candidates[deck_id] = {"cards": signature, "since": now}
+        return False
+
+    required_ms = max(0, int(getattr(config, "PLAYER_BUST_CONFIRM_MS", 100)))
+    return (now - float(candidate.get("since", now))) * 1000 >= required_ms
+
+
+def _publish_round_if_dealer_terminal(confirmed_player_busts: set[str] | None = None) -> None:
     global round_locked
 
+    confirmed_player_busts = set(confirmed_player_busts or ())
     snapshot = _snapshot_deck_cards()
     if not any(item["cards"] for item in snapshot.values()):
         _reset_round_state()
@@ -474,14 +498,16 @@ def _publish_round_if_dealer_terminal() -> None:
         if str(item.get("role", "")).lower() != "dealer" and item.get("cards")
     ]
 
-    # A bust is final immediately; it does not depend on the dealer finishing.
-    # This also closes rounds in which every player busts and the dealer no
-    # longer needs to draw to 17.
+    # A confirmed bust is final and does not depend on the dealer finishing.
+    # Requiring the same raw hand for a short interval prevents a single bad
+    # model prediction from permanently scoring the round as a loss.
     for deck_id, item in player_items:
         stats = _get_player_stats(deck_id, item.get("name") or deck_id)
         if stats.get("current_event") or stats.get("split_session"):
             continue
         if best_hand_value(item["cards"]) <= 21:
+            continue
+        if deck_id not in confirmed_player_busts:
             continue
         is_double = bool(stats.get("current_double"))
         updated = _append_score_event(
@@ -504,6 +530,12 @@ def _publish_round_if_dealer_terminal() -> None:
         round_locked = True
         return
 
+    # Do not finish and lock a dealer round before any participating player is
+    # visible. The detector evaluates the dealer ROI first, so this can occur
+    # briefly even though player cards arrive in the same/newer camera frames.
+    if not player_items:
+        return
+
     dealer = next(
         (item for item in snapshot.values() if str(item.get("role", "")).lower() == "dealer"),
         None,
@@ -517,6 +549,14 @@ def _publish_round_if_dealer_terminal() -> None:
 
     dealer_bust = dealer_value > 21
     dealer_blackjack = _is_blackjack(dealer["cards"])
+
+    # The dealer may already be terminal when a player gets a transient false
+    # card. Wait for confirmation instead of scoring that one frame as a loss.
+    if any(
+        best_hand_value(item["cards"]) > 21 and deck_id not in confirmed_player_busts
+        for deck_id, item in unresolved_players
+    ):
+        return
 
     for deck_id, item in unresolved_players:
         stats = _get_player_stats(deck_id, item.get("name") or deck_id)
@@ -567,6 +607,9 @@ def _publish_round_if_dealer_terminal() -> None:
         updated["current_double"] = False
         save_player_stats()
 
+    # At least one player was present and every unresolved player was scored.
+    # In particular, a dealer bust reaches the win branch for every non-busted
+    # player instead of locking an empty/partially detected round beforehand.
     round_locked = True
 
 
@@ -595,6 +638,9 @@ def update_deck_tracking(detections_by_deck: dict, frame_width: int, frame_heigh
         _apply_pending_reset_request()
         registry.refresh_from_disk()
         any_raw_cards = False
+        player_ids_with_raw_updates = set()
+        confirmed_player_busts = set()
+        detection_time = time.monotonic()
         for deck_id, deck_detections in detections_by_deck.items():
             cards = []
             for det in deck_detections:
@@ -606,7 +652,16 @@ def update_deck_tracking(detections_by_deck: dict, frame_width: int, frame_heigh
             if cards:
                 any_raw_cards = True
             registry.update_deck_cards(deck_id, cards)
-            _update_split_session(deck_id, registry.states.get(deck_id).cards if deck_id in registry.states else cards)
+            state = registry.states.get(deck_id)
+            if state is not None and not state.deck.is_dealer():
+                player_ids_with_raw_updates.add(deck_id)
+                if _player_bust_is_confirmed(deck_id, cards, detection_time):
+                    confirmed_player_busts.add(deck_id)
+            _update_split_session(deck_id, state.cards if state is not None else cards)
+
+        for deck_id, state in registry.states.items():
+            if not state.deck.is_dealer() and deck_id not in player_ids_with_raw_updates:
+                _player_bust_is_confirmed(deck_id, [], detection_time)
 
         if any_raw_cards:
             no_detection_frames = 0
@@ -616,7 +671,7 @@ def update_deck_tracking(detections_by_deck: dict, frame_width: int, frame_heigh
                 _reset_round_state()
 
         _sync_active_deck_to_session()
-        _publish_round_if_dealer_terminal()
+        _publish_round_if_dealer_terminal(confirmed_player_busts)
     except Exception as e:
         print(f"[DECK] update_deck_tracking error: {e}")
 

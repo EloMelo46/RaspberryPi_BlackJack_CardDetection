@@ -35,7 +35,9 @@ class CommentaryEngine:
         cooldown_seconds: float = 10.0,
         enable_audio: bool = True,
         enable_deduplication: bool = True,
+        enabled: bool = True,
     ):
+        self.enabled = bool(enabled)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -46,7 +48,8 @@ class CommentaryEngine:
         self.enable_audio = enable_audio
         self.enable_deduplication = enable_deduplication
 
-        self.client = OpenAI()
+        # Do not even construct an API client while commentary is disabled.
+        self.client = OpenAI() if self.enabled else None
 
         self.last_state_hash: Optional[str] = None
         self.last_comment_time = 0.0
@@ -89,6 +92,8 @@ class CommentaryEngine:
 
     def _get_embedding(self, text: str) -> Optional[list[float]]:
         """Get embedding for text using OpenAI API."""
+        if not self.enabled or self.client is None:
+            return None
         try:
             response = self.client.embeddings.create(
                 model="text-embedding-3-small",
@@ -100,6 +105,8 @@ class CommentaryEngine:
 
     def _is_too_similar(self, new_comment: str) -> bool:
         """Check if new comment is too similar to recent history."""
+        if not self.enabled:
+            return False
         if not self.comment_history:
             return False
         
@@ -149,6 +156,8 @@ Variiere Deinen Stil und sag etwas NEUES!
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def should_comment(self, state: Dict[str, Any]) -> bool:
+        if not self.enabled:
+            return False
         if self.enable_audio and self.is_playing_audio():
             return False
         now = time.time()
@@ -163,6 +172,8 @@ Variiere Deinen Stil und sag etwas NEUES!
 
     def should_play_comment(self, comment: str) -> bool:
         """Check if comment should be played (not too similar to history)."""
+        if not self.enabled:
+            return False
         if not self.enable_deduplication or not comment:
             return True
         return not self._is_too_similar(comment)
@@ -220,6 +231,8 @@ Spielzustand:
 """
 
     def generate_text_comment(self, state: Dict[str, Any]) -> Optional[str]:
+        if not self.enabled or self.client is None:
+            return None
         prompt = self.build_prompt(state)
         try:
             resp = self.client.responses.create(model=self.text_model, input=prompt)
@@ -233,6 +246,8 @@ Spielzustand:
         return path
 
     def generate_audio(self, comment: str) -> Optional[Path]:
+        if not self.enabled or self.client is None:
+            return None
         path = self.output_dir / "latest_comment.mp3"
         try:
             if self.enable_audio and self.is_playing_audio():
@@ -295,7 +310,7 @@ Spielzustand:
 
     def process_state(self, state: Dict[str, Any]) -> Optional[str]:
         """Called from main loop with `get_game_state_dict()` result."""
-        if state is None:
+        if not self.enabled or state is None:
             return None
         if not self.should_comment(state):
             return None
@@ -317,7 +332,7 @@ Spielzustand:
 
     def process_state_non_blocking(self, state: Dict[str, Any]):
         """Run commentary work in a background thread to avoid blocking frame loop."""
-        if state is None:
+        if not self.enabled or state is None:
             return
         # Drop frame commentary request if a previous commentary job is still running.
         if not self._worker_lock.acquire(blocking=False):
