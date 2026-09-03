@@ -1,5 +1,5 @@
 from deck_config import DeckROI
-from deck_manager import DeckState
+from deck_manager import DeckState, best_hand_value
 import postprocessing
 
 
@@ -84,3 +84,19 @@ def test_dealer_bust_does_not_lock_round_before_a_player_appears(monkeypatch, tm
     event = postprocessing.load_player_stats()["player-1"]["current_event"]
     assert event["result"] == "win"
     assert postprocessing.round_locked is True
+
+
+def test_soft_hand_uses_highest_non_bust_value_for_final_score(monkeypatch, tmp_path):
+    cards = ["As", "9h"]
+    states = {
+        "player-1": _state("player-1", "Player 1", cards),
+        "dealer": _state("dealer", "Dealer", ["10c", "9d"], role="dealer"),
+    }
+    _prepare_round(monkeypatch, tmp_path, states)
+
+    assert best_hand_value(cards) == 20
+    postprocessing._publish_round_if_dealer_terminal(set())
+
+    event = postprocessing.load_player_stats()["player-1"]["current_event"]
+    assert event["result"] == "win"
+    assert event["delta"] == 1
