@@ -54,6 +54,24 @@ def _load_player_stats() -> dict:
         return {}
 
 
+def _empty_player_stats(name: str) -> dict:
+    return {
+        "name": name,
+        "score": 0,
+        "wins": 0,
+        "losses": 0,
+        "pushes": 0,
+        "rounds": 0,
+        "blackjacks": 0,
+        "doubles": 0,
+        "splits": 0,
+        "current_double": False,
+        "split_session": None,
+        "current_event": None,
+        "history": [],
+    }
+
+
 def _merged_deck_summary() -> dict:
     deck_registry.refresh_from_disk()
     deck_count = postprocessing.load_deck_count()
@@ -70,11 +88,14 @@ def _merged_deck_summary() -> dict:
     for deck in summary.get("decks", []):
         runtime_deck = runtime_by_id.get(str(deck.get("deck_id")), {})
         merged = dict(deck)
-        for key in ("cards", "seen_counter", "last_recommendation", "running_count", "true_count", "points", "best_value", "stats"):
+        for key in ("cards", "seen_counter", "last_recommendation", "running_count", "true_count", "points", "best_value"):
             if key in runtime_deck:
                 merged[key] = runtime_deck[key]
-        if merged.get("deck_id") in player_stats:
-            merged["stats"] = player_stats[merged["deck_id"]]
+        if str(merged.get("role", "")).lower() != "dealer":
+            merged["stats"] = player_stats.get(
+                merged.get("deck_id"),
+                _empty_player_stats(str(merged.get("name") or merged.get("deck_id") or "Player")),
+            )
         merged_decks.append(merged)
 
     summary["decks"] = merged_decks
@@ -91,7 +112,7 @@ def _merged_deck_summary() -> dict:
     summary["true_count"] = runtime.get("true_count", summary.get("true_count", 0.0))
     summary["decks"] = summary.get("decks", [])
     summary["deck_count"] = deck_count
-    summary["player_stats"] = player_stats or runtime.get("player_stats", {})
+    summary["player_stats"] = player_stats
     summary["ready_errors"] = deck_registry.ready_errors()
     return summary
 
@@ -151,7 +172,7 @@ def index():
                     }}
                     html, body {{ min-height: 100%; }}
                     body {{ margin: 0; background: radial-gradient(circle at top, #141926, var(--bg) 60%); color: var(--text); font-family: Inter, system-ui, sans-serif; }}
-                    .app {{ display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; padding: 16px; align-items: start; }}
+                    .app {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 440px); gap: 16px; padding: 16px; align-items: start; }}
                     .stage {{ background: rgba(10, 13, 20, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.35); }}
                     .toolbar {{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }}
                     .setup-panel {{ display: grid; grid-template-columns: 120px minmax(220px, 1fr) auto; gap: 8px; margin-bottom: 12px; }}
@@ -164,24 +185,38 @@ def index():
                     #overlay {{ position: absolute; inset: 0; pointer-events: auto; touch-action: none; }}
                     .deck-box {{ position: absolute; border: 2px solid var(--accent-2); border-radius: 12px; background: rgba(245,158,11,0.10); box-sizing: border-box; cursor: move; user-select: none; touch-action: none; }}
                     .deck-box.active {{ border-color: var(--good); border-width: 4px; background: rgba(34,197,94,0.16); box-shadow: 0 0 0 3px rgba(34,197,94,0.24), 0 0 28px rgba(34,197,94,0.35); }}
+                    .result-pulse.outcome-win {{ --result-rgb: 34, 197, 94; --result-color: #4ade80; }}
+                    .result-pulse.outcome-loss {{ --result-rgb: 244, 63, 94; --result-color: #fb7185; }}
+                    .result-pulse.outcome-push {{ --result-rgb: 250, 204, 21; --result-color: #fde047; }}
+                    .deck-box.result-pulse {{ border-color: var(--result-color) !important; border-width: 4px; background: rgba(var(--result-rgb), .18) !important; animation: resultBoxPulse .86s ease-in-out infinite; }}
+                    .deck-box.result-pulse .deck-label {{ color: var(--result-color); border-color: rgba(var(--result-rgb), .56); }}
                     .deck-label {{ position: absolute; left: 8px; top: -12px; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); padding: 3px 8px; border-radius: 999px; font-size: 12px; }}
                     .resize-handle {{ position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; border-radius: 4px; background: rgba(238,242,255,0.72); border: 1px solid var(--panel); box-shadow: 0 1px 6px rgba(0,0,0,.28); cursor: nwse-resize; touch-action: none; }}
                     .sidebar {{ display: grid; gap: 12px; }}
                     .card {{ background: rgba(18,22,35,.9); border: 1px solid rgba(255,255,255,.07); border-radius: 16px; padding: 14px; }}
-                    .deck-list {{ display: grid; gap: 8px; margin-top: 10px; }}
+                    .deck-list {{ display: grid; gap: 8px; margin-top: 10px; overflow-anchor: none; }}
                     .deck-item {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,.04); cursor: pointer; }}
                     .deck-item.active {{ outline: 2px solid var(--good); background: rgba(34,197,94,0.16); box-shadow: 0 0 0 2px rgba(34,197,94,0.18); }}
+                    .deck-item.result-pulse {{ outline: 2px solid var(--result-color); background: rgba(var(--result-rgb), .14); animation: resultItemPulse .86s ease-in-out infinite; }}
+                    .deck-item.result-pulse .outcome-text {{ color: var(--result-color); font-weight: 800; }}
                     .deck-name {{ font-weight: 600; }}
                     .small {{ font-size: 12px; color: var(--muted); }}
                     .value {{ font-variant-numeric: tabular-nums; }}
                     .rec {{ font-size: 28px; font-weight: 800; line-height: 1.1; margin-top: 6px; }}
+                    .rec.outcome-win {{ color: #4ade80; text-shadow: 0 0 22px rgba(34,197,94,.34); }}
+                    .rec.outcome-loss {{ color: #fb7185; text-shadow: 0 0 22px rgba(244,63,94,.34); }}
+                    .rec.outcome-push {{ color: #fde047; text-shadow: 0 0 22px rgba(250,204,21,.30); }}
                     .rec-top {{ display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 10px; align-items: start; }}
                     .count-card {{ background: rgba(255,255,255,.04); border-radius: 12px; padding: 10px; }}
                     .count-value {{ font-size: 26px; font-weight: 800; }}
                     .count-meaning {{ margin-top: 4px; }}
                     .result-title {{ margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.08); }}
-                    .deck-count-row {{ display: grid; grid-template-columns: 86px auto; gap: 8px; }}
+                    .deck-count-row {{ display: grid; grid-template-columns: 86px auto minmax(150px, auto); gap: 8px; align-items: stretch; }}
                     #deckCountInput {{ max-width: 120px; }}
+                    .reset-hold {{ --hold-progress: 0%; position: relative; isolation: isolate; overflow: hidden; min-width: 150px; background: linear-gradient(135deg, #c2410c, #be123c); color: white; touch-action: none; user-select: none; }}
+                    .reset-hold::before {{ content: ''; position: absolute; z-index: -1; inset: 0 auto 0 0; width: var(--hold-progress); background: linear-gradient(90deg, #f97316, #ef4444); transition: width .08s linear; }}
+                    .reset-hold.holding {{ box-shadow: 0 0 0 2px rgba(251,146,60,.45), 0 0 24px rgba(239,68,68,.28); }}
+                    .reset-hold:disabled {{ cursor: wait; opacity: .82; }}
                     .stats {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }}
                     .score-grid {{ display: grid; gap: 8px; }}
                     .score-row {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
@@ -206,6 +241,43 @@ def index():
                     .row > * {{ flex: 1; }}
                     .error {{ color: var(--danger); font-weight: 700; margin-bottom: 10px; }}
                     .dealer-box {{ border-color: var(--danger) !important; background: rgba(251,113,133,0.12) !important; }}
+                    .stats-panel {{ min-width: 0; }}
+                    .stats-panel-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }}
+                    .stats-title {{ font-size: 17px; font-weight: 800; }}
+                    .stats-scroll {{ max-height: min(52vh, 560px); overflow: auto; padding-right: 3px; overscroll-behavior: contain; overflow-anchor: none; scrollbar-color: rgba(125,211,252,.35) transparent; }}
+                    .stats-summary {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 10px; }}
+                    .summary-stat {{ padding: 9px; border: 1px solid rgba(255,255,255,.06); border-radius: 11px; background: linear-gradient(145deg, rgba(125,211,252,.08), rgba(255,255,255,.025)); }}
+                    .summary-stat .num {{ margin-top: 2px; font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; }}
+                    .player-stat-list {{ display: grid; gap: 10px; }}
+                    .player-stat-card {{ min-width: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.075); border-radius: 14px; background: rgba(255,255,255,.035); }}
+                    .player-stat-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px; background: linear-gradient(135deg, rgba(37,99,235,.12), rgba(124,58,237,.08)); }}
+                    .player-stat-name {{ min-width: 0; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+                    .score-pill {{ flex: none; padding: 4px 9px; border-radius: 999px; background: rgba(148,163,184,.14); font-weight: 900; font-variant-numeric: tabular-nums; }}
+                    .score-pill.positive, .history-delta.positive {{ color: #4ade80; }}
+                    .score-pill.negative, .history-delta.negative {{ color: #fb7185; }}
+                    .score-pill.neutral, .history-delta.neutral {{ color: #fde047; }}
+                    .player-stat-metrics {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; border-top: 1px solid rgba(255,255,255,.05); border-bottom: 1px solid rgba(255,255,255,.05); background: rgba(255,255,255,.045); }}
+                    .player-metric {{ padding: 8px 5px; text-align: center; }}
+                    .player-metric strong {{ display: block; font-size: 16px; font-variant-numeric: tabular-nums; }}
+                    .history-wrap {{ max-height: 210px; overflow: auto; }}
+                    .history-table {{ width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }}
+                    .history-table th {{ position: sticky; top: 0; z-index: 1; padding: 7px 6px; background: #1a1f2d; color: var(--muted); text-align: left; font-weight: 600; }}
+                    .history-table td {{ padding: 7px 6px; border-top: 1px solid rgba(255,255,255,.045); }}
+                    .history-table th:nth-last-child(-n+2), .history-table td:nth-last-child(-n+2) {{ text-align: right; }}
+                    .result-badge {{ display: inline-flex; min-width: 44px; justify-content: center; border-radius: 999px; padding: 3px 6px; font-size: 10px; font-weight: 900; letter-spacing: .03em; }}
+                    .result-badge.win {{ color: #86efac; background: rgba(34,197,94,.15); }}
+                    .result-badge.loss {{ color: #fda4af; background: rgba(244,63,94,.15); }}
+                    .result-badge.push {{ color: #fde047; background: rgba(250,204,21,.14); }}
+                    .stats-empty, .history-empty {{ padding: 18px 10px; color: var(--muted); text-align: center; }}
+                    .history-empty {{ padding: 13px 8px; font-size: 12px; }}
+                    .reset-status {{ min-height: 16px; margin-top: 7px; color: var(--muted); font-size: 11px; }}
+                    #playerStatsPanel:fullscreen {{ box-sizing: border-box; width: 100vw; height: 100vh; max-width: none; margin: 0; padding: clamp(16px, 2.4vw, 34px); border: 0; border-radius: 0; background: radial-gradient(circle at top, #182034, #0b0d12 62%); display: flex; flex-direction: column; }}
+                    #playerStatsPanel:fullscreen .stats-panel-head {{ margin-bottom: 18px; }}
+                    #playerStatsPanel:fullscreen .stats-title {{ font-size: clamp(22px, 2.4vw, 34px); }}
+                    #playerStatsPanel:fullscreen .stats-scroll {{ flex: 1; max-height: none; }}
+                    #playerStatsPanel:fullscreen .stats-summary {{ grid-template-columns: repeat(3, minmax(150px, 240px)); }}
+                    #playerStatsPanel:fullscreen .player-stat-list {{ grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }}
+                    #playerStatsPanel:fullscreen .history-wrap {{ max-height: min(52vh, 520px); }}
                     .crop-modal {{ position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(3,7,18,0.78); backdrop-filter: blur(8px); }}
                     .crop-modal.open {{ display: flex; }}
                     .crop-panel {{ width: min(92vw, 760px); background: rgba(18,22,35,0.98); border: 1px solid rgba(255,255,255,.10); border-radius: 14px; padding: 12px; box-shadow: 0 28px 90px rgba(0,0,0,.48); }}
@@ -216,20 +288,32 @@ def index():
                     #overlay, .deck-box, .deck-item, .crop-modal, .crop-panel, #cropPreviewImg {{ -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }}
                     html:fullscreen body {{ min-height: 100vh; background: var(--bg); }}
                     html:fullscreen .app {{ min-height: 100vh; box-sizing: border-box; }}
+                    @keyframes resultBoxPulse {{
+                        0%, 100% {{ box-shadow: 0 0 0 2px rgba(var(--result-rgb), .25), 0 0 14px rgba(var(--result-rgb), .25); filter: saturate(.9); }}
+                        50% {{ box-shadow: 0 0 0 5px rgba(var(--result-rgb), .50), 0 0 34px rgba(var(--result-rgb), .72); filter: saturate(1.45); }}
+                    }}
+                    @keyframes resultItemPulse {{
+                        0%, 100% {{ box-shadow: inset 0 0 0 0 rgba(var(--result-rgb), .08), 0 0 8px rgba(var(--result-rgb), .12); }}
+                        50% {{ box-shadow: inset 0 0 24px rgba(var(--result-rgb), .22), 0 0 20px rgba(var(--result-rgb), .42); }}
+                    }}
                     @media (max-width: 800px) {{
+                        html, body {{ width: 100%; max-width: 100%; overflow-x: hidden; }}
                         body {{ overflow-y: auto; }}
-                        .app {{ display: block; min-height: 100dvh; box-sizing: border-box; padding: 6px; }}
+                        .app {{ display: block; width: 100%; max-width: 100%; min-height: 100dvh; box-sizing: border-box; padding: 6px; overflow: hidden; }}
                         .stage {{ padding: 6px; border-radius: 12px; margin-bottom: 6px; }}
                         .setup-panel {{ grid-template-columns: 72px minmax(0, 1fr); gap: 6px; margin-bottom: 8px; }}
                         .setup-panel button {{ grid-column: 1 / -1; }}
-                        .toolbar {{ gap: 6px; margin-bottom: 8px; }}
-                        .toolbar button {{ flex: 1 1 30%; padding: 9px 8px; }}
-                        .deck-count-row {{ flex: 1 1 100%; grid-template-columns: 78px 1fr; }}
+                        .toolbar {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 8px; }}
+                        .toolbar > button {{ min-width: 0; padding: 9px 5px; }}
+                        .deck-count-row {{ grid-column: 1 / -1; width: 100%; min-width: 0; grid-template-columns: 72px minmax(0, .8fr) minmax(0, 1.35fr); }}
+                        .deck-count-row button {{ min-width: 0; padding-inline: 5px; font-size: 11px; }}
+                        .reset-hold {{ min-width: 0; }}
                         .hint {{ display: none; }}
                         .frame-wrap {{ aspect-ratio: {config.FRAME_WIDTH} / {config.FRAME_HEIGHT}; height: auto; border-radius: 10px; }}
-                        .sidebar {{ display: grid; gap: 6px; overflow: visible; }}
-                        .card {{ padding: 8px; border-radius: 12px; }}
+                        .sidebar {{ display: grid; min-width: 0; gap: 6px; overflow: visible; }}
+                        .card {{ min-width: 0; padding: 8px; border-radius: 12px; overflow: hidden; }}
                         .rec-top {{ grid-template-columns: minmax(0, 1fr) 92px; gap: 6px; }}
+                        .rec-top > * {{ min-width: 0; }}
                         .count-card {{ padding: 8px; }}
                         .count-meaning {{ margin-top: 2px; font-size: 9px; line-height: 1.1; }}
                         .result-title {{ margin-top: 6px; padding-top: 6px; }}
@@ -246,13 +330,25 @@ def index():
                         .score-row {{ gap: 5px; }}
                         .score-actions {{ gap: 5px; margin-top: 6px; }}
                         .score-actions-row {{ gap: 5px; }}
-                        .score-actions button {{ padding: 7px 5px; font-size: 11px; }}
+                        .score-actions button {{ min-width: 0; padding: 7px 3px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }}
                         .split-hands {{ margin-top: 6px; }}
                         .deck-list {{ max-height: 116px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }}
                         .deck-item {{ padding: 8px; }}
+                        .stats-scroll {{ max-height: 46vh; }}
+                        .stats-summary {{ gap: 5px; }}
+                        .summary-stat {{ padding: 7px; }}
+                        .player-stat-head {{ padding: 9px; }}
+                        .history-wrap {{ overflow-x: auto; }}
+                        .history-table {{ min-width: 340px; font-size: 10px; }}
+                        .history-table th, .history-table td {{ padding: 6px 4px; }}
+                        #playerStatsPanel:fullscreen {{ padding: 10px; }}
+                        #playerStatsPanel:fullscreen .player-stat-list {{ grid-template-columns: 1fr; }}
                         .crop-modal {{ padding: 8px; align-items: start; }}
                         .crop-panel {{ width: 100%; margin-top: 8px; padding: 8px; border-radius: 12px; }}
                         .crop-head {{ margin-bottom: 8px; }}
+                    }}
+                    @media (prefers-reduced-motion: reduce) {{
+                        .deck-box.result-pulse, .deck-item.result-pulse {{ animation-duration: 1.8s; }}
                     }}
                 </style>
             </head>
@@ -271,6 +367,9 @@ def index():
                             <div class="deck-count-row">
                                 <input id="deckCountInput" type="number" min="1" max="12" value="{postprocessing.load_deck_count()}" title="Decks in shoe">
                                 <button onclick="saveDeckCount()">Set decks</button>
+                                <button id="resetStatsButton" class="reset-hold" type="button" aria-label="Hold for five seconds to reset all scores">
+                                    <span id="resetStatsLabel">Hold 5s · reset</span>
+                                </button>
                             </div>
                         </div>
                         <div id="errorBanner" class="error" style="display:none;"></div>
@@ -320,6 +419,19 @@ def index():
                             <div class="small">Players / Dealer</div>
                             <div id="deckList" class="deck-list"></div>
                         </div>
+                        <section id="playerStatsPanel" class="card stats-panel">
+                            <div class="stats-panel-head">
+                                <div>
+                                    <div class="small">Table overview</div>
+                                    <div class="stats-title">Player Statistics</div>
+                                </div>
+                                <button id="statsFullscreenBtn" type="button" onclick="toggleStatsFullscreen()">Fullscreen</button>
+                            </div>
+                            <div id="playerStatsContent" class="stats-scroll">
+                                <div class="stats-empty">No player statistics yet.</div>
+                            </div>
+                            <div id="resetStatus" class="reset-status" role="status" aria-live="polite"></div>
+                        </section>
                     </div>
                 </div>
 
@@ -356,6 +468,18 @@ def index():
                     let cropPreviewDeckId = null;
                     let cropPreviewTimer = null;
                     let longPressPreviewOpened = false;
+                    let latestPrediction = 'Loading...';
+                    let activeOutcome = null;
+                    let statsRenderSignature = '';
+                    let resetHoldTimer = null;
+                    let resetHoldFrame = null;
+                    let resetHoldStartedAt = 0;
+                    let deckRenderSignature = '';
+                    let deckRenderPending = false;
+                    let pendingStatsDeckData = null;
+                    let userScrollActive = false;
+                    let scrollIdleTimer = null;
+                    const RESET_HOLD_MS = 5000;
 
                     function clamp(value, min, max) {{
                         return Math.max(min, Math.min(max, value));
@@ -420,6 +544,78 @@ def index():
                     function deckDisplayName(deck) {{
                         if (!deck) return 'ROI Preview';
                         return deck.role === 'dealer' ? 'Dealer' : deck.name;
+                    }}
+
+                    function roundOutcome(deck) {{
+                        const event = deck && deck.stats ? deck.stats.current_event : null;
+                        const result = event ? event.result : null;
+                        if (result === 'win') return {{ key: 'win', label: 'Win', className: 'outcome-win', event }};
+                        if (result === 'loss') return {{ key: 'loss', label: 'Busted', className: 'outcome-loss', event }};
+                        if (result === 'push') return {{ key: 'push', label: 'Push', className: 'outcome-push', event }};
+                        return null;
+                    }}
+
+                    function renderActiveRecommendation() {{
+                        const recbox = document.getElementById('recbox');
+                        recbox.classList.remove('outcome-win', 'outcome-loss', 'outcome-push');
+                        if (activeOutcome) {{
+                            recbox.innerText = activeOutcome.label;
+                            recbox.classList.add(activeOutcome.className);
+                            return;
+                        }}
+                        recbox.innerText = latestPrediction || 'No prediction';
+                    }}
+
+                    function deckUiSignature(deckData = decks, selectedDeckId = activeDeckId) {{
+                        return JSON.stringify({{
+                            activeDeckId: selectedDeckId,
+                            decks: (deckData || []).map(deck => ({{
+                                deckId: deck.deck_id,
+                                name: deck.name,
+                                role: deck.role,
+                                enabled: deck.enabled,
+                                x: deck.x,
+                                y: deck.y,
+                                width: deck.width,
+                                height: deck.height,
+                                cards: deck.cards || [],
+                                points: deck.points,
+                                recommendation: deck.last_recommendation,
+                                result: deck.stats && deck.stats.current_event ? deck.stats.current_event.result : null,
+                            }})),
+                        }});
+                    }}
+
+                    function pageScrollTop() {{
+                        const scrollingElement = document.scrollingElement || document.documentElement;
+                        return scrollingElement ? scrollingElement.scrollTop : window.scrollY;
+                    }}
+
+                    function restorePageScroll(scrollTop) {{
+                        const apply = () => {{
+                            const scrollingElement = document.scrollingElement || document.documentElement;
+                            if (scrollingElement) scrollingElement.scrollTop = scrollTop;
+                        }};
+                        apply();
+                        window.requestAnimationFrame(apply);
+                    }}
+
+                    function markScrollActivity() {{
+                        userScrollActive = true;
+                        if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
+                        scrollIdleTimer = window.setTimeout(() => {{
+                            userScrollActive = false;
+                            scrollIdleTimer = null;
+                            if (deckRenderPending) {{
+                                deckRenderPending = false;
+                                renderDecks();
+                            }}
+                            if (pendingStatsDeckData) {{
+                                const pendingData = pendingStatsDeckData;
+                                pendingStatsDeckData = null;
+                                renderPlayerStatistics(pendingData);
+                            }}
+                        }}, 240);
                     }}
 
                     function openCropPreview(deckId) {{
@@ -522,7 +718,16 @@ def index():
                         decks = data.decks || [];
                         decks.forEach(makeSquare);
                         activeDeckId = data.active_deck_id || null;
-                        renderDecks();
+                        activeOutcome = roundOutcome(decks.find(deck => deck.deck_id === activeDeckId));
+                        const nextSignature = deckUiSignature();
+                        if (nextSignature !== deckRenderSignature) {{
+                            if (!force && userScrollActive) {{
+                                deckRenderPending = true;
+                            }} else {{
+                                renderDecks();
+                            }}
+                        }}
+                        renderActiveRecommendation();
                         updateErrorBanner(data.ready_errors || []);
                     }}
 
@@ -541,12 +746,17 @@ def index():
                         const overlay = document.getElementById('overlay');
                         const list = document.getElementById('deckList');
                         const previousScrollTop = list.scrollTop;
+                        const previousPageScrollTop = pageScrollTop();
                         overlay.innerHTML = '';
                         list.innerHTML = '';
 
                         decks.forEach((deck) => {{
                             const box = document.createElement('div');
-                            box.className = 'deck-box' + (deck.deck_id === activeDeckId ? ' active' : '') + (deck.role === 'dealer' ? ' dealer-box' : '');
+                            const outcome = roundOutcome(deck);
+                            box.className = 'deck-box'
+                                + (deck.deck_id === activeDeckId ? ' active' : '')
+                                + (deck.role === 'dealer' ? ' dealer-box' : '')
+                                + (outcome ? ` result-pulse ${{outcome.className}}` : '');
                             const pos = toScreen(deck);
                             box.style.left = pos.left + 'px';
                             box.style.top = pos.top + 'px';
@@ -582,11 +792,28 @@ def index():
 
                         sortedDecksForList().forEach(deck => {{
                             const item = document.createElement('div');
-                            item.className = 'deck-item' + (deck.deck_id === activeDeckId ? ' active' : '');
+                            const outcome = roundOutcome(deck);
+                            item.className = 'deck-item'
+                                + (deck.deck_id === activeDeckId ? ' active' : '')
+                                + (outcome ? ` result-pulse ${{outcome.className}}` : '');
                             const cards = deck.cards && deck.cards.length ? deck.cards.join(', ') : 'no cards';
                             const rec = deck.last_recommendation || '';
                             const points = deck.points || '-';
-                            item.innerHTML = `<div><div class="deck-name">${{deck.role === 'dealer' ? 'Dealer' : deck.name}}</div><div class="small">${{cards}}</div><div class="small">${{rec}}</div></div><div class="small value">${{points}} pts</div>`;
+                            const details = document.createElement('div');
+                            const name = document.createElement('div');
+                            name.className = 'deck-name';
+                            name.textContent = deck.role === 'dealer' ? 'Dealer' : deck.name;
+                            const cardsLine = document.createElement('div');
+                            cardsLine.className = 'small';
+                            cardsLine.textContent = cards;
+                            const recLine = document.createElement('div');
+                            recLine.className = 'small' + (outcome ? ' outcome-text' : '');
+                            recLine.textContent = outcome ? outcome.label : rec;
+                            const pointsLine = document.createElement('div');
+                            pointsLine.className = 'small value';
+                            pointsLine.textContent = `${{points}} pts`;
+                            details.append(name, cardsLine, recLine);
+                            item.append(details, pointsLine);
                             attachListPreviewTriggers(item, deck.deck_id);
                             if (deck.role !== 'dealer') {{
                                 item.addEventListener('click', async () => {{
@@ -599,15 +826,19 @@ def index():
                             }}
                             list.appendChild(item);
                         }});
-                        list.scrollTop = previousScrollTop;
+                        const restoreDeckListScroll = () => {{
+                            list.scrollTop = previousScrollTop;
+                        }};
+                        restoreDeckListScroll();
+                        window.requestAnimationFrame(restoreDeckListScroll);
+                        deckRenderSignature = deckUiSignature();
+                        restorePageScroll(previousPageScrollTop);
                     }}
 
                     function sortedDecksForList() {{
                         return [...decks].sort((a, b) => {{
                             const aDealer = a.role === 'dealer';
                             const bDealer = b.role === 'dealer';
-                            if (a.deck_id === activeDeckId && !aDealer) return -1;
-                            if (b.deck_id === activeDeckId && !bDealer) return 1;
                             if (aDealer && !bDealer) return 1;
                             if (!aDealer && bDealer) return -1;
                             return 0;
@@ -617,11 +848,13 @@ def index():
                     function overlayLabel(deck) {{
                         const isMobile = window.matchMedia('(max-width: 800px)').matches;
                         const isActive = deck.deck_id === activeDeckId;
+                        const outcome = roundOutcome(deck);
+                        const resultSuffix = outcome ? ` · ${{outcome.label.toUpperCase()}}` : '';
                         if (isMobile) {{
                             const name = deck.role === 'dealer' ? 'Dealer' : deck.name;
-                            return `${{isActive ? '● ' : ''}}${{name}}`;
+                            return `${{isActive ? '● ' : ''}}${{name}}${{resultSuffix}}`;
                         }}
-                        return `${{isActive ? 'ON TURN · ' : ''}}${{deck.role === 'dealer' ? 'Dealer' : deck.name}}`;
+                        return `${{isActive ? 'ON TURN · ' : ''}}${{deck.role === 'dealer' ? 'Dealer' : deck.name}}${{resultSuffix}}`;
                     }}
 
                     async function setActiveDeck(deckId) {{
@@ -640,8 +873,9 @@ def index():
                             decks = data.decks;
                             decks.forEach(makeSquare);
                         }}
+                        activeOutcome = roundOutcome(decks.find(deck => deck.deck_id === activeDeckId));
                         renderDecks();
-                        document.getElementById('deckList').scrollTop = 0;
+                        renderActiveRecommendation();
                     }}
 
                     async function setupPlayerBoxes() {{
@@ -826,8 +1060,8 @@ def index():
                     async function updatePrediction() {{
                         const resp = await fetch('/prediction');
                         const data = await resp.json();
-                        const rec = data.recommendation || 'No prediction';
-                        document.getElementById('recbox').innerText = rec;
+                        latestPrediction = data.recommendation || 'No prediction';
+                        renderActiveRecommendation();
                     }}
 
                     async function updateStats() {{
@@ -844,6 +1078,8 @@ def index():
                         }}
                         const active = (data.decks || []).find(deck => deck.deck_id === data.active_deck_id);
                         const stats = active && active.stats ? active.stats : {{ score: 0, wins: 0, losses: 0, pushes: 0 }};
+                        activeOutcome = roundOutcome(active);
+                        renderActiveRecommendation();
                         document.getElementById('activeScore').innerText = stats.score || 0;
                         document.getElementById('activeWins').innerText = stats.wins || 0;
                         document.getElementById('activeLosses').innerText = stats.losses || 0;
@@ -862,6 +1098,7 @@ def index():
                         document.getElementById('nextSplitBtn').disabled = !splitActive || stats.split_session.finished || stats.split_session.active_index >= 1;
                         document.getElementById('finishSplitBtn').disabled = !splitActive || stats.split_session.finished;
                         document.getElementById('cancelSplitBtn').disabled = !splitActive;
+                        renderPlayerStatistics(data.decks || []);
                     }}
 
                     function isDoubleRecommendation(text) {{
@@ -880,6 +1117,299 @@ def index():
                         if (value > 0) return 'Slight high-card tendency';
                         if (value < 0) return 'Slight low-card tendency';
                         return 'Count neutral';
+                    }}
+
+                    function numberValue(value) {{
+                        const parsed = Number(value || 0);
+                        return Number.isFinite(parsed) ? parsed : 0;
+                    }}
+
+                    function signedPoints(value) {{
+                        const points = numberValue(value);
+                        return points > 0 ? `+${{points}}` : String(points);
+                    }}
+
+                    function scoreTone(value) {{
+                        const score = numberValue(value);
+                        if (score > 0) return 'positive';
+                        if (score < 0) return 'negative';
+                        return 'neutral';
+                    }}
+
+                    function historyResult(result) {{
+                        if (result === 'win') return {{ label: 'Win', className: 'win' }};
+                        if (result === 'loss') return {{ label: 'Busted', className: 'loss' }};
+                        return {{ label: 'Push', className: 'push' }};
+                    }}
+
+                    function historyEventLabel(event) {{
+                        const labels = {{
+                            blackjack: 'Blackjack',
+                            bust: 'Bust',
+                            double: 'Double',
+                            split_auto: 'Split',
+                            auto_win: 'Standard',
+                            auto_loss: 'Standard',
+                            auto_push: 'Standard',
+                        }};
+                        return labels[event] || String(event || 'Round').replaceAll('_', ' ');
+                    }}
+
+                    function summaryTile(label, value) {{
+                        const tile = document.createElement('div');
+                        tile.className = 'summary-stat';
+                        const caption = document.createElement('div');
+                        caption.className = 'small';
+                        caption.textContent = label;
+                        const number = document.createElement('div');
+                        number.className = 'num';
+                        number.textContent = value;
+                        tile.append(caption, number);
+                        return tile;
+                    }}
+
+                    function playerMetric(label, value) {{
+                        const metric = document.createElement('div');
+                        metric.className = 'player-metric';
+                        const number = document.createElement('strong');
+                        number.textContent = value;
+                        const caption = document.createElement('span');
+                        caption.className = 'small';
+                        caption.textContent = label;
+                        metric.append(number, caption);
+                        return metric;
+                    }}
+
+                    function renderPlayerStatistics(deckData) {{
+                        const players = (deckData || []).filter(deck => deck.role !== 'dealer');
+                        const signature = JSON.stringify(players.map(deck => ({{
+                            id: deck.deck_id,
+                            name: deck.name,
+                            stats: deck.stats || {{}},
+                        }})));
+                        if (signature === statsRenderSignature) return;
+                        if (userScrollActive) {{
+                            pendingStatsDeckData = deckData;
+                            return;
+                        }}
+                        statsRenderSignature = signature;
+
+                        const content = document.getElementById('playerStatsContent');
+                        const previousPageScrollTop = pageScrollTop();
+                        const previousStatsScrollTop = content.scrollTop;
+                        const previousHistoryScroll = new Map(
+                            Array.from(content.querySelectorAll('.history-wrap[data-deck-id]'))
+                                .map(history => [history.dataset.deckId, history.scrollTop])
+                        );
+                        content.innerHTML = '';
+                        if (!players.length) {{
+                            const empty = document.createElement('div');
+                            empty.className = 'stats-empty';
+                            empty.textContent = 'No players configured yet.';
+                            content.appendChild(empty);
+                            restorePageScroll(previousPageScrollTop);
+                            return;
+                        }}
+
+                        const totalScore = players.reduce((sum, deck) => sum + numberValue((deck.stats || {{}}).score), 0);
+                        const totalRounds = players.reduce((sum, deck) => sum + numberValue((deck.stats || {{}}).rounds), 0);
+                        const summary = document.createElement('div');
+                        summary.className = 'stats-summary';
+                        summary.append(
+                            summaryTile('Players', players.length),
+                            summaryTile('Total points', signedPoints(totalScore)),
+                            summaryTile('Rounds', totalRounds),
+                        );
+                        content.appendChild(summary);
+
+                        const playerList = document.createElement('div');
+                        playerList.className = 'player-stat-list';
+                        players.forEach(deck => {{
+                            const stats = deck.stats || {{}};
+                            const wins = numberValue(stats.wins);
+                            const losses = numberValue(stats.losses);
+                            const pushes = numberValue(stats.pushes);
+                            const decided = wins + losses;
+                            const winRate = decided ? `${{Math.round((wins / decided) * 100)}}%` : '—';
+                            const score = numberValue(stats.score);
+                            const history = Array.isArray(stats.history) ? stats.history : [];
+                            let runningScore = 0;
+                            const rounds = history.map((event, index) => {{
+                                runningScore += numberValue(event.delta);
+                                return {{ event, round: index + 1, runningScore }};
+                            }}).reverse();
+
+                            const card = document.createElement('article');
+                            card.className = 'player-stat-card';
+                            card.dataset.deckId = deck.deck_id;
+                            const head = document.createElement('div');
+                            head.className = 'player-stat-head';
+                            const name = document.createElement('div');
+                            name.className = 'player-stat-name';
+                            name.textContent = deck.name || deck.deck_id;
+                            const scorePill = document.createElement('div');
+                            scorePill.className = `score-pill ${{scoreTone(score)}}`;
+                            scorePill.textContent = `${{signedPoints(score)}} pts`;
+                            head.append(name, scorePill);
+                            card.appendChild(head);
+
+                            const metrics = document.createElement('div');
+                            metrics.className = 'player-stat-metrics';
+                            metrics.append(
+                                playerMetric('Wins', wins),
+                                playerMetric('Pushes', pushes),
+                                playerMetric('Losses', losses),
+                                playerMetric('Win rate', winRate),
+                            );
+                            card.appendChild(metrics);
+
+                            if (!rounds.length) {{
+                                const emptyHistory = document.createElement('div');
+                                emptyHistory.className = 'history-empty';
+                                emptyHistory.textContent = 'Round history will appear here.';
+                                card.appendChild(emptyHistory);
+                            }} else {{
+                                const historyWrap = document.createElement('div');
+                                historyWrap.className = 'history-wrap';
+                                historyWrap.dataset.deckId = deck.deck_id;
+                                const table = document.createElement('table');
+                                table.className = 'history-table';
+                                const tableHead = document.createElement('thead');
+                                const headingRow = document.createElement('tr');
+                                ['Round', 'Result', 'Play', 'Points', 'Total'].forEach(label => {{
+                                    const th = document.createElement('th');
+                                    th.textContent = label;
+                                    headingRow.appendChild(th);
+                                }});
+                                tableHead.appendChild(headingRow);
+                                const body = document.createElement('tbody');
+                                rounds.forEach(item => {{
+                                    const row = document.createElement('tr');
+                                    const roundCell = document.createElement('td');
+                                    roundCell.textContent = `#${{item.round}}`;
+                                    const resultCell = document.createElement('td');
+                                    const result = historyResult(item.event.result);
+                                    const badge = document.createElement('span');
+                                    badge.className = `result-badge ${{result.className}}`;
+                                    badge.textContent = result.label;
+                                    resultCell.appendChild(badge);
+                                    const eventCell = document.createElement('td');
+                                    eventCell.textContent = historyEventLabel(item.event.event);
+                                    const deltaCell = document.createElement('td');
+                                    deltaCell.className = `history-delta ${{scoreTone(item.event.delta)}}`;
+                                    deltaCell.textContent = signedPoints(item.event.delta);
+                                    const totalCell = document.createElement('td');
+                                    totalCell.textContent = signedPoints(item.runningScore);
+                                    row.append(roundCell, resultCell, eventCell, deltaCell, totalCell);
+                                    body.appendChild(row);
+                                }});
+                                table.append(tableHead, body);
+                                historyWrap.appendChild(table);
+                                card.appendChild(historyWrap);
+                            }}
+                            playerList.appendChild(card);
+                        }});
+                        content.appendChild(playerList);
+                        const restoreStatisticsScroll = () => {{
+                            content.scrollTop = previousStatsScrollTop;
+                            content.querySelectorAll('.history-wrap[data-deck-id]').forEach(history => {{
+                                history.scrollTop = previousHistoryScroll.get(history.dataset.deckId) || 0;
+                            }});
+                        }};
+                        restoreStatisticsScroll();
+                        window.requestAnimationFrame(restoreStatisticsScroll);
+                        restorePageScroll(previousPageScrollTop);
+                    }}
+
+                    async function toggleStatsFullscreen() {{
+                        const panel = document.getElementById('playerStatsPanel');
+                        try {{
+                            if (document.fullscreenElement === panel) {{
+                                await document.exitFullscreen();
+                                return;
+                            }}
+                            if (document.fullscreenElement) await document.exitFullscreen();
+                            await panel.requestFullscreen();
+                        }} catch (err) {{
+                            alert('Statistics fullscreen is not available in this browser.');
+                        }}
+                    }}
+
+                    function setResetProgress(progress) {{
+                        const button = document.getElementById('resetStatsButton');
+                        const percent = Math.max(0, Math.min(100, progress * 100));
+                        button.style.setProperty('--hold-progress', `${{percent}}%`);
+                        button.setAttribute('aria-valuenow', String(Math.round(percent)));
+                    }}
+
+                    function cancelResetHold() {{
+                        const button = document.getElementById('resetStatsButton');
+                        if (button.disabled) return;
+                        if (resetHoldTimer) window.clearTimeout(resetHoldTimer);
+                        if (resetHoldFrame) window.cancelAnimationFrame(resetHoldFrame);
+                        resetHoldTimer = null;
+                        resetHoldFrame = null;
+                        resetHoldStartedAt = 0;
+                        button.classList.remove('holding');
+                        document.getElementById('resetStatsLabel').textContent = 'Hold 5s · reset';
+                        setResetProgress(0);
+                    }}
+
+                    function updateResetHoldProgress() {{
+                        if (!resetHoldStartedAt) return;
+                        const elapsed = performance.now() - resetHoldStartedAt;
+                        const progress = Math.min(1, elapsed / RESET_HOLD_MS);
+                        setResetProgress(progress);
+                        const remaining = Math.max(0, Math.ceil((RESET_HOLD_MS - elapsed) / 1000));
+                        document.getElementById('resetStatsLabel').textContent = `Keep holding · ${{remaining}}s`;
+                        if (progress < 1) resetHoldFrame = window.requestAnimationFrame(updateResetHoldProgress);
+                    }}
+
+                    function startResetHold(evt) {{
+                        const button = document.getElementById('resetStatsButton');
+                        if (button.disabled || resetHoldStartedAt) return;
+                        if (evt && evt.type === 'pointerdown' && evt.button !== 0) return;
+                        if (evt) evt.preventDefault();
+                        resetHoldStartedAt = performance.now();
+                        button.classList.add('holding');
+                        updateResetHoldProgress();
+                        resetHoldTimer = window.setTimeout(performStatsReset, RESET_HOLD_MS);
+                    }}
+
+                    async function performStatsReset() {{
+                        const button = document.getElementById('resetStatsButton');
+                        if (resetHoldTimer) window.clearTimeout(resetHoldTimer);
+                        if (resetHoldFrame) window.cancelAnimationFrame(resetHoldFrame);
+                        resetHoldTimer = null;
+                        resetHoldFrame = null;
+                        resetHoldStartedAt = 0;
+                        button.classList.remove('holding');
+                        button.disabled = true;
+                        setResetProgress(1);
+                        document.getElementById('resetStatsLabel').textContent = 'Resetting…';
+                        const status = document.getElementById('resetStatus');
+                        try {{
+                            const resp = await fetch('/reset-stats', {{ method: 'POST' }});
+                            const data = await resp.json().catch(() => ({{ ok: false }}));
+                            if (!resp.ok || !data.ok) throw new Error(data.error || 'Reset failed');
+                            statsRenderSignature = '';
+                            activeOutcome = null;
+                            renderActiveRecommendation();
+                            await reloadDecks(true);
+                            await updateStats();
+                            status.textContent = 'All scores and history reset. Clear the table before the next round.';
+                            document.getElementById('resetStatsLabel').textContent = 'Reset complete';
+                        }} catch (err) {{
+                            status.textContent = '';
+                            alert(err.message || 'Could not reset statistics.');
+                            document.getElementById('resetStatsLabel').textContent = 'Reset failed';
+                        }} finally {{
+                            window.setTimeout(() => {{
+                                button.disabled = false;
+                                document.getElementById('resetStatsLabel').textContent = 'Hold 5s · reset';
+                                setResetProgress(0);
+                            }}, 1400);
+                        }}
                     }}
 
                     async function saveDeckCount() {{
@@ -955,6 +1485,8 @@ def index():
                         if (!document.fullscreenElement) {{
                             unlockOrientation();
                         }}
+                        const statsPanel = document.getElementById('playerStatsPanel');
+                        document.getElementById('statsFullscreenBtn').innerText = document.fullscreenElement === statsPanel ? 'Exit fullscreen' : 'Fullscreen';
                         renderDecks();
                     }});
 
@@ -976,7 +1508,14 @@ def index():
                         }} catch (err) {{}}
                     }}
 
+                    window.addEventListener('scroll', markScrollActivity, {{ passive: true }});
+                    document.addEventListener('scroll', markScrollActivity, {{ capture: true, passive: true }});
+
                     window.addEventListener('resize', () => {{
+                        if (userScrollActive) {{
+                            deckRenderPending = true;
+                            return;
+                        }}
                         renderDecks();
                     }});
 
@@ -988,6 +1527,19 @@ def index():
                     document.getElementById('cropModal').addEventListener('contextmenu', (evt) => evt.preventDefault());
                     document.getElementById('overlay').addEventListener('contextmenu', (evt) => evt.preventDefault());
                     document.getElementById('deckList').addEventListener('contextmenu', (evt) => evt.preventDefault());
+
+                    const resetStatsButton = document.getElementById('resetStatsButton');
+                    resetStatsButton.addEventListener('pointerdown', startResetHold);
+                    resetStatsButton.addEventListener('pointerup', cancelResetHold);
+                    resetStatsButton.addEventListener('pointercancel', cancelResetHold);
+                    resetStatsButton.addEventListener('pointerleave', cancelResetHold);
+                    resetStatsButton.addEventListener('contextmenu', (evt) => evt.preventDefault());
+                    resetStatsButton.addEventListener('keydown', (evt) => {{
+                        if ((evt.key === ' ' || evt.key === 'Enter') && !evt.repeat) startResetHold(evt);
+                    }});
+                    resetStatsButton.addEventListener('keyup', (evt) => {{
+                        if (evt.key === ' ' || evt.key === 'Enter') cancelResetHold();
+                    }});
 
                     document.addEventListener('keydown', (evt) => {{
                         if (evt.key === 'Escape') {{
@@ -1266,10 +1818,17 @@ def deck_count():
     return jsonify({"ok": True, "decks": decks})
 
 
-
-
-
-
+@app.route("/reset-stats", methods=["POST"])
+def reset_stats():
+    try:
+        request_id = postprocessing.request_full_reset()
+        return jsonify({
+            "ok": True,
+            "request_id": request_id,
+            "message": "All player scores and round history were reset.",
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 

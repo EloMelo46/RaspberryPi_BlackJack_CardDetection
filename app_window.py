@@ -24,8 +24,7 @@ try:
     webview.create_window(
         "BlackJack Card Detection",
         "http://192.168.1.65:5000",
-        width=1280,
-        height=800
+        fullscreen=True
     )
     webview.start()
 finally:

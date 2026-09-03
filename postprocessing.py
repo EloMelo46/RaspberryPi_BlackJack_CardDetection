@@ -1,5 +1,6 @@
 import cv2
 import json
+import time
 import config
 from config import OUTPUT_DIR, CARD_LABELS, DECAY_LIMIT
 import card_logic as bj
@@ -30,10 +31,22 @@ game_stats = {
 last_published_outcome = None
 PLAYER_STATS_PATH = OUTPUT_DIR / "player_stats.json"
 DECK_COUNT_PATH = OUTPUT_DIR / "deck_count.json"
+RESET_REQUEST_PATH = OUTPUT_DIR / "reset_request.json"
 player_stats = {}
 round_locked = False
 no_detection_frames = 0
 EMPTY_ROUND_RESET_FRAMES = 5
+
+
+def _read_reset_request_id() -> str:
+    try:
+        raw = json.loads(RESET_REQUEST_PATH.read_text())
+        return str(raw.get("request_id") or "")
+    except Exception:
+        return ""
+
+
+last_reset_request_id = _read_reset_request_id()
 
 
 def load_deck_count() -> int:
@@ -122,6 +135,56 @@ def reset_player_stats() -> None:
     round_locked = False
     no_detection_frames = 0
     save_player_stats()
+
+
+def reset_all_stats(lock_current_round: bool = False) -> None:
+    """Clear every accumulated score while keeping ROI and shoe settings."""
+    global game_stats, last_published_outcome
+    global player_stats, round_locked, no_detection_frames
+
+    player_stats = {}
+    round_locked = bool(lock_current_round)
+    no_detection_frames = 0
+    last_published_outcome = None
+    game_stats = {
+        "player_wins": 0,
+        "dealer_wins": 0,
+        "pushes": 0,
+        "blackjacks": 0,
+        "last_outcome": None,
+    }
+    session.reset()
+    registry.clear()
+    save_player_stats()
+    save_game_stats()
+
+
+def request_full_reset() -> str:
+    """Reset locally and notify the separate detector process to do the same."""
+    global last_reset_request_id
+
+    request_id = str(time.time_ns())
+    reset_all_stats(lock_current_round=True)
+    payload = {"request_id": request_id}
+    try:
+        tmp_path = RESET_REQUEST_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        tmp_path.replace(RESET_REQUEST_PATH)
+    except Exception as e:
+        print(f"[STATS] Failed to write reset request: {e}")
+        raise
+    last_reset_request_id = request_id
+    return request_id
+
+
+def _apply_pending_reset_request() -> None:
+    global last_reset_request_id
+
+    request_id = _read_reset_request_id()
+    if not request_id or request_id == last_reset_request_id:
+        return
+    last_reset_request_id = request_id
+    reset_all_stats(lock_current_round=True)
 
 
 def _reset_round_state() -> None:
@@ -405,6 +468,42 @@ def _publish_round_if_dealer_terminal() -> None:
     if round_locked:
         return
 
+    player_items = [
+        (deck_id, item)
+        for deck_id, item in snapshot.items()
+        if str(item.get("role", "")).lower() != "dealer" and item.get("cards")
+    ]
+
+    # A bust is final immediately; it does not depend on the dealer finishing.
+    # This also closes rounds in which every player busts and the dealer no
+    # longer needs to draw to 17.
+    for deck_id, item in player_items:
+        stats = _get_player_stats(deck_id, item.get("name") or deck_id)
+        if stats.get("current_event") or stats.get("split_session"):
+            continue
+        if best_hand_value(item["cards"]) <= 21:
+            continue
+        is_double = bool(stats.get("current_double"))
+        updated = _append_score_event(
+            deck_id,
+            item.get("name") or deck_id,
+            -2 if is_double else -1,
+            "double" if is_double else "bust",
+            "loss",
+        )
+        updated["current_double"] = False
+        save_player_stats()
+
+    unresolved_players = []
+    for deck_id, item in player_items:
+        stats = _get_player_stats(deck_id, item.get("name") or deck_id)
+        if not stats.get("current_event"):
+            unresolved_players.append((deck_id, item))
+
+    if player_items and not unresolved_players:
+        round_locked = True
+        return
+
     dealer = next(
         (item for item in snapshot.values() if str(item.get("role", "")).lower() == "dealer"),
         None,
@@ -419,14 +518,8 @@ def _publish_round_if_dealer_terminal() -> None:
     dealer_bust = dealer_value > 21
     dealer_blackjack = _is_blackjack(dealer["cards"])
 
-    for deck_id, item in snapshot.items():
-        if str(item.get("role", "")).lower() == "dealer" or not item.get("cards"):
-            continue
-
+    for deck_id, item in unresolved_players:
         stats = _get_player_stats(deck_id, item.get("name") or deck_id)
-        if stats.get("current_event"):
-            continue
-
         split_session = stats.get("split_session")
         if split_session:
             hands = split_session.get("hands", [])
@@ -499,6 +592,7 @@ def update_deck_tracking(detections_by_deck: dict, frame_width: int, frame_heigh
     """Update shared deck registry with per-deck detections."""
     global no_detection_frames
     try:
+        _apply_pending_reset_request()
         registry.refresh_from_disk()
         any_raw_cards = False
         for deck_id, deck_detections in detections_by_deck.items():
@@ -1015,11 +1109,27 @@ def annotate_frame(frame, detections, frame_width):
         height = int(deck.get("height", 640))
         is_active = deck.get("deck_id") == active_deck_id
         is_dealer = deck.get("deck_id") == dealer_id or str(deck.get("role", "")).lower() == "dealer"
-        color = (0, 0, 255) if is_dealer else ((0, 255, 255) if is_active else (255, 180, 0))
-        cv2.rectangle(frame, (x, y), (min(w - 1, x + width), min(h - 1, y + height)), color, 2)
+        current_event = (deck.get("stats") or {}).get("current_event") or {}
+        result = current_event.get("result")
+        result_colors = {
+            "win": (34, 197, 94),
+            "loss": (251, 113, 133),
+            "push": (250, 204, 21),
+        }
+        result_labels = {"win": "WIN", "loss": "BUSTED", "push": "PUSH"}
+        if result in result_colors:
+            pulse_on = int(time.monotonic() * 2.5) % 2 == 0
+            base_color = result_colors[result]
+            color = base_color if pulse_on else tuple(int(channel * 0.42) for channel in base_color)
+            thickness = 6 if pulse_on else 3
+        else:
+            color = (0, 0, 255) if is_dealer else ((0, 255, 255) if is_active else (255, 180, 0))
+            thickness = 2
+        cv2.rectangle(frame, (x, y), (min(w - 1, x + width), min(h - 1, y + height)), color, thickness)
+        label_suffix = f" - {result_labels[result]}" if result in result_labels else ""
         cv2.putText(
             frame,
-            f"{deck.get('name', 'Deck')} [{deck.get('deck_id')}]",
+            f"{deck.get('name', 'Deck')} [{deck.get('deck_id')}]{label_suffix}",
             (max(0, x), max(20, y - 6)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
